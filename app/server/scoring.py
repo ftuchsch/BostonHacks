@@ -69,7 +69,76 @@ RAMACHANDRAN_TABLES: Mapping[str, tuple[tuple[float, ...], ...]] = {
     for key, components in _RAMA_COMPONENTS.items()
 }
 
-__all__ = ["clash_energy", "ramachandran_penalty"]
+ALPHA_ROT = 0.02
+
+
+def _generate_rotamer_bins(chi_count: int) -> tuple[tuple[tuple[float, ...], tuple[float, ...]], ...]:
+    """Return coarse top-rotamer bins for a residue with ``chi_count`` torsions."""
+
+    if chi_count <= 0:
+        return ((),)
+
+    centres = (-60.0, 60.0, 180.0)
+    width = 35.0
+
+    bins: list[tuple[tuple[float, ...], tuple[float, ...]]] = []
+    # The MVP uses a simple tensor product of three canonical centres for each χ
+    # angle. This yields 3^n bins which is still tractable for the small n (≤ 4)
+    # encountered in protein side chains and matches the "top-k" guidance in the
+    # scoring spec. Each bin stores its centres together with a uniform half width
+    # (±35°) used to determine whether a χ angle is considered "inside" the bin.
+    def _build(current: tuple[float, ...]) -> None:
+        if len(current) == chi_count:
+            bins.append((current, tuple(width for _ in current)))
+            return
+        for centre in centres:
+            _build((*current, centre))
+
+    _build(())
+    return tuple(bins)
+
+
+def _normalise_residue_key(residue: str) -> str:
+    residue = residue.strip().upper()
+    if len(residue) == 1:
+        return residue
+    return residue[:3]
+
+
+RESIDUE_CHI_COUNT: Mapping[str, int] = {
+    "ALA": 0,
+    "GLY": 0,
+    "SER": 1,
+    "CYS": 1,
+    "VAL": 1,
+    "THR": 1,
+    "ASN": 2,
+    "ASP": 2,
+    "LEU": 2,
+    "ILE": 2,
+    "HIS": 2,
+    "PHE": 2,
+    "TYR": 2,
+    "TRP": 2,
+    "GLN": 3,
+    "GLU": 3,
+    "MET": 3,
+    "LYS": 4,
+    "ARG": 4,
+    "PRO": 0,
+}
+
+
+ROTAMER_LIBRARY: Mapping[str, tuple[tuple[tuple[float, ...], tuple[float, ...]], ...]] = {
+    key: _generate_rotamer_bins(count) for key, count in RESIDUE_CHI_COUNT.items()
+}
+ROTAMER_LIBRARY = {
+    **ROTAMER_LIBRARY,
+    "DEFAULT": _generate_rotamer_bins(1),
+}
+
+
+__all__ = ["clash_energy", "ramachandran_penalty", "rotamer_penalty"]
 
 
 def _wrap_angle(angle: float) -> float:
@@ -137,6 +206,99 @@ def ramachandran_penalty(
     if penalty < 0.0:
         penalty = 0.0
     return min(penalty, RAMA_MAX_PENALTY)
+
+
+def _get_residue_type(res_idx: int, residue_types: Mapping[int, str] | Iterable[str]) -> str:
+    if isinstance(residue_types, Mapping):
+        try:
+            residue = residue_types[res_idx]
+        except KeyError as exc:
+            raise ValueError(f"Unknown residue index {res_idx} for rotamer lookup") from exc
+    else:
+        residue_list = list(residue_types)
+        try:
+            residue = residue_list[res_idx]
+        except IndexError as exc:
+            raise ValueError(f"Unknown residue index {res_idx} for rotamer lookup") from exc
+    return _normalise_residue_key(residue)
+
+
+def _get_residue_chis(
+    res_idx: int,
+    coords: Mapping[int, Iterable[float]] | Iterable[Iterable[float]],
+) -> tuple[float, ...]:
+    if isinstance(coords, Mapping):
+        try:
+            chis = coords[res_idx]
+        except KeyError as exc:
+            raise ValueError(f"Missing χ angles for residue {res_idx}") from exc
+    else:
+        coord_list = list(coords)
+        try:
+            chis = coord_list[res_idx]
+        except IndexError as exc:
+            raise ValueError(f"Missing χ angles for residue {res_idx}") from exc
+    return tuple(float(angle) for angle in chis)
+
+
+def _angle_distance(a: float, b: float) -> float:
+    return abs(_wrap_angle(a - b))
+
+
+def rotamer_penalty(
+    res_idx: int,
+    coords: Mapping[int, Iterable[float]] | Iterable[Iterable[float]],
+    residue_types: Mapping[int, str] | Iterable[str],
+) -> float:
+    """Return the coarse rotamer penalty for ``res_idx``.
+
+    The function implements the MVP outlined in 02_SCORE_MATH.md §3. It checks the
+    χ angles of the provided residue against a small library of "top" rotamer bins
+    (tensor-product combinations of gauche+/− and trans states). If all χ angles
+    lie within any bin's window the penalty is zero. Otherwise the squared excess
+    (beyond the bin widths) is accumulated and scaled by ``ALPHA_ROT``.
+    """
+
+    residue_type = _get_residue_type(res_idx, residue_types)
+    chi_angles = _get_residue_chis(res_idx, coords)
+
+    chi_count = RESIDUE_CHI_COUNT.get(residue_type, len(chi_angles))
+    if chi_count == 0 or not chi_angles:
+        return 0.0
+
+    if len(chi_angles) < chi_count:
+        raise ValueError(
+            f"Residue {res_idx} ({residue_type}) expected {chi_count} χ angles, "
+            f"received {len(chi_angles)}"
+        )
+
+    bins = ROTAMER_LIBRARY.get(residue_type)
+    if not bins:
+        bins = ROTAMER_LIBRARY["DEFAULT"]
+        chi_count = min(chi_count, len(chi_angles), 1)
+
+    best_excess = float("inf")
+    # Use only the number of χ angles that the bin was generated for. Extra angles
+    # are ignored for the MVP implementation to keep computation local.
+    relevant_angles = chi_angles[:chi_count]
+    for centres, widths in bins:
+        if len(centres) != len(relevant_angles):
+            continue
+        excess_sq = 0.0
+        for angle, centre, width in zip(relevant_angles, centres, widths):
+            delta = _angle_distance(angle, centre)
+            if delta <= width:
+                continue
+            extra = delta - width
+            excess_sq += extra * extra
+        if excess_sq < best_excess:
+            best_excess = excess_sq
+            if best_excess == 0.0:
+                break
+
+    if best_excess == float("inf"):
+        return 0.0
+    return ALPHA_ROT * best_excess
 
 
 def _get_atom_attribute(atom: Any, name: str) -> float:
