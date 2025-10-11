@@ -126,6 +126,7 @@ export const PlayScreen = ({
   const lastDiffRef = useRef<ScoreDiff | null>(null);
   const retryTokenRef = useRef<number | null>(null);
   const hasRetriedRef = useRef(false);
+  const queueScoreRequestRef = useRef<((diff: ScoreDiff) => void) | null>(null);
   const interactingRef = useRef(false);
   const interactingTimerRef = useRef<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -302,12 +303,13 @@ export const PlayScreen = ({
         window.clearTimeout(retryTokenRef.current);
       }
       retryTokenRef.current = window.setTimeout(() => {
-        if (lastDiffRef.current) {
-          queueScoreRequest(lastDiffRef.current);
+        const queue = queueScoreRequestRef.current;
+        if (queue && lastDiffRef.current) {
+          queue(lastDiffRef.current);
         }
       }, 250);
     }
-  }, [queueScoreRequest]);
+  }, []);
 
   const directRequest = useCallback(
     async (requestId: number, diff?: ScoreDiff) => {
@@ -340,6 +342,7 @@ export const PlayScreen = ({
     },
     [directRequest, workerRef]
   );
+  queueScoreRequestRef.current = queueScoreRequest;
 
   const handleWorkerMessage = useCallback(
     (message: WorkerMessage) => {
@@ -363,14 +366,15 @@ export const PlayScreen = ({
             window.clearTimeout(retryTokenRef.current);
           }
           retryTokenRef.current = window.setTimeout(() => {
-            if (lastDiffRef.current) {
-              queueScoreRequest(lastDiffRef.current);
+            const queue = queueScoreRequestRef.current;
+            if (queue && lastDiffRef.current) {
+              queue(lastDiffRef.current);
             }
           }, 250);
         }
       }
     },
-    [applyScorePayload, queueScoreRequest]
+    [applyScorePayload]
   );
 
   useEffect(() => {

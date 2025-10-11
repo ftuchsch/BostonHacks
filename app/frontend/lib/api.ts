@@ -19,6 +19,13 @@ export type ScoreResponse = {
   score: number;
   terms: ScoreTerms;
   per_residue: PerResidueTerm[];
+  stats?: ScoreStats;
+};
+
+export type ScoreStats = {
+  term_eval_calls: Record<string, number>;
+  full_passes: number;
+  incremental_passes: number;
 };
 
 export type SubmitRequest = {
@@ -201,8 +208,138 @@ export async function score(body: ScoreRequestBody): Promise<ScoreResponse> {
     throw new Error(`Score request failed with status ${response.status}`);
   }
 
-  const payload = (await response.json()) as ScoreResponse;
-  return payload;
+  const payload = (await response.json()) as Record<string, unknown>;
+  return normaliseScoreResponse(payload);
+}
+
+const SCORE_TERM_KEYS: Array<keyof ScoreTerms> = [
+  "clash",
+  "rama",
+  "rotamer",
+  "ss",
+  "compact",
+  "hbond",
+];
+
+function coerceNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  const result = Number(value);
+  return Number.isFinite(result) ? result : fallback;
+}
+
+function normaliseTerms(raw: unknown): ScoreTerms {
+  const source =
+    raw && typeof raw === "object"
+      ? (raw as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  return {
+    clash: coerceNumber(source.clash),
+    rama: coerceNumber(source.rama),
+    rotamer: coerceNumber(source.rotamer),
+    ss: coerceNumber(source.ss),
+    compact: coerceNumber(source.compact),
+    hbond: coerceNumber(source.hbond),
+  };
+}
+
+function normaliseLegacyResidue(entry: unknown, fallbackIdx: number): PerResidueTerm | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const payload = entry as Record<string, unknown>;
+  const idxCandidate = payload.idx ?? payload.i ?? fallbackIdx;
+  const idx = coerceNumber(idxCandidate, fallbackIdx);
+  return {
+    idx,
+    clash: coerceNumber(payload.clash),
+    rama: coerceNumber(payload.rama),
+    rotamer: coerceNumber(payload.rotamer),
+    ss: coerceNumber(payload.ss),
+  };
+}
+
+function normaliseCacheResidue(idxKey: string, entry: unknown): PerResidueTerm | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const idx = Number.parseInt(idxKey, 10);
+  const payload = entry as Record<string, unknown>;
+  const termsSource =
+    payload.terms && typeof payload.terms === "object"
+      ? (payload.terms as Record<string, unknown>)
+      : payload;
+  const resolvedIdx = Number.isNaN(idx)
+    ? coerceNumber(payload.idx, 0)
+    : idx;
+  return {
+    idx: resolvedIdx,
+    clash: coerceNumber(termsSource.clash),
+    rama: coerceNumber(termsSource.rama),
+    rotamer: coerceNumber(termsSource.rotamer),
+    ss: coerceNumber(termsSource.ss),
+  };
+}
+
+function normalisePerResidue(raw: unknown): PerResidueTerm[] {
+  if (Array.isArray(raw)) {
+    return raw
+      .map((entry, index) => normaliseLegacyResidue(entry, index))
+      .filter((entry): entry is PerResidueTerm => entry !== null)
+      .sort((a, b) => a.idx - b.idx);
+  }
+
+  if (raw && typeof raw === "object") {
+    return Object.entries(raw as Record<string, unknown>)
+      .map(([idx, entry]) => normaliseCacheResidue(idx, entry))
+      .filter((entry): entry is PerResidueTerm => entry !== null)
+      .sort((a, b) => a.idx - b.idx);
+  }
+
+  return [];
+}
+
+function normaliseStats(raw: unknown): ScoreStats | undefined {
+  if (!raw || typeof raw !== "object") {
+    return undefined;
+  }
+  const payload = raw as Record<string, unknown>;
+  const termCallsRaw =
+    payload.term_eval_calls && typeof payload.term_eval_calls === "object"
+      ? (payload.term_eval_calls as Record<string, unknown>)
+      : {};
+  const term_eval_calls: Record<string, number> = {};
+  SCORE_TERM_KEYS.forEach((key) => {
+    if (key in termCallsRaw) {
+      term_eval_calls[key] = coerceNumber(termCallsRaw[key]);
+    }
+  });
+  Object.entries(termCallsRaw).forEach(([key, value]) => {
+    if (!(key in term_eval_calls)) {
+      term_eval_calls[key] = coerceNumber(value);
+    }
+  });
+  return {
+    term_eval_calls,
+    full_passes: coerceNumber(payload.full_passes),
+    incremental_passes: coerceNumber(payload.incremental_passes),
+  };
+}
+
+function normaliseScoreResponse(raw: Record<string, unknown>): ScoreResponse {
+  const perResidue = normalisePerResidue(raw.per_residue);
+  const terms = normaliseTerms(raw.terms);
+  const stats = normaliseStats(raw.stats);
+  const response: ScoreResponse = {
+    score: coerceNumber(raw.score),
+    terms,
+    per_residue: perResidue,
+  };
+  if (stats) {
+    response.stats = stats;
+  }
+  return response;
 }
 
 export async function nudge(): Promise<NudgeResponse> {

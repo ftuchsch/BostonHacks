@@ -11,18 +11,23 @@ export default function LevelLoaderPage({
 }: {
   params: { id: string };
 }) {
-  const [level, setLevel] = useState<Level | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [coordsStatus, setCoordsStatus] = useState<
-    "idle" | "loading" | "ready" | "error"
-  >("idle");
-  const [coordsError, setCoordsError] = useState<string | null>(null);
-  const [coords, setCoords] = useState<number[][] | null>(null);
+  type LoaderState =
+    | { status: "loading" }
+    | { status: "not_found" }
+    | { status: "error"; message: string }
+    | {
+        status: "ready";
+        level: Level;
+        coords: number[][];
+        coordsStatus: "loading" | "ready" | "error";
+        coordsError: string | null;
+      };
+
+  const [state, setState] = useState<LoaderState>({ status: "loading" });
   const isMounted = useRef(true);
 
   useEffect(() => {
+    isMounted.current = true;
     return () => {
       isMounted.current = false;
     };
@@ -42,59 +47,25 @@ export default function LevelLoaderPage({
     return points;
   }, []);
 
-  const fetchCoords = useCallback(
-    async (lvl: Level, isCancelled: () => boolean = () => false) => {
-      if (isCancelled() || !isMounted.current) {
-        return;
-      }
-
-      setCoordsStatus("loading");
-      setCoordsError(null);
-      setCoords(null);
-
-      try {
-        const response = await fetch(lvl.start_coords_url);
-        if (isCancelled() || !isMounted.current) {
-          return;
+  const updateCoordsStatus = useCallback(
+    (status: "loading" | "ready" | "error", message: string | null = null) => {
+      setState((prev) => {
+        if (!isMounted.current || prev.status !== "ready") {
+          return prev;
         }
-
-        if (!response.ok) {
-          throw new Error(
-            `Failed to fetch coordinates (status ${response.status})`
-          );
-        }
-
-        await response.text();
-        if (isCancelled() || !isMounted.current) {
-          return;
-        }
-
-        setCoords(generateBackbone(lvl.sequence));
-        setCoordsStatus("ready");
-      } catch (err) {
-        if (isCancelled() || !isMounted.current) {
-          return;
-        }
-
-        setCoordsStatus("error");
-        setCoordsError(
-          err instanceof Error
-            ? err.message
-            : "Failed to load starting coordinates."
-        );
-        setCoords(generateBackbone(lvl.sequence));
-      }
+        return {
+          ...prev,
+          coordsStatus: status,
+          coordsError: message,
+        };
+      });
     },
-    [generateBackbone]
+    []
   );
 
   useEffect(() => {
     let cancelled = false;
-    setLoading(true);
-    setNotFound(false);
-    setError(null);
-    setCoordsStatus("idle");
-    setCoordsError(null);
+    setState({ status: "loading" });
 
     void (async () => {
       try {
@@ -103,24 +74,56 @@ export default function LevelLoaderPage({
           return;
         }
 
-        setLevel(lvl);
-        await fetchCoords(lvl, () => cancelled);
+        const coords = generateBackbone(lvl.sequence);
+        if (cancelled || !isMounted.current) {
+          return;
+        }
+
+        setState({
+          status: "ready",
+          level: lvl,
+          coords,
+          coordsStatus: "loading",
+          coordsError: null,
+        });
+
+        void (async () => {
+          try {
+            const response = await fetch(lvl.start_coords_url, { cache: "no-store" });
+            if (cancelled || !isMounted.current) {
+              return;
+            }
+
+            if (!response.ok) {
+              throw new Error(
+                `Failed to fetch coordinates (status ${response.status})`
+              );
+            }
+
+            await response.arrayBuffer(); // drain body quietly
+            updateCoordsStatus("ready");
+          } catch (err) {
+            if (cancelled || !isMounted.current) {
+              return;
+            }
+            const message =
+              err instanceof Error
+                ? err.message
+                : "Failed to load starting coordinates.";
+            updateCoordsStatus("error", message);
+          }
+        })();
       } catch (err) {
         if (cancelled || !isMounted.current) {
           return;
         }
 
         if (err instanceof ApiError && err.status === 404) {
-          setNotFound(true);
-          setLevel(null);
+          setState({ status: "not_found" });
         } else {
           const message =
             err instanceof Error ? err.message : "Failed to load level.";
-          setError(message);
-        }
-      } finally {
-        if (!cancelled && isMounted.current) {
-          setLoading(false);
+          setState({ status: "error", message });
         }
       }
     })();
@@ -128,15 +131,49 @@ export default function LevelLoaderPage({
     return () => {
       cancelled = true;
     };
-  }, [fetchCoords, params.id]);
+  }, [generateBackbone, params.id, updateCoordsStatus]);
 
   const handleRetryCoords = useCallback(() => {
-    if (level) {
-      void fetchCoords(level);
+    if (!isMounted.current) {
+      return;
     }
-  }, [fetchCoords, level]);
+    setState((prev) => {
+      if (prev.status !== "ready") {
+        return prev;
+      }
 
-  if (loading) {
+      updateCoordsStatus("loading");
+
+      void (async () => {
+        try {
+          const response = await fetch(prev.level.start_coords_url, { cache: "no-store" });
+          if (!isMounted.current) {
+            return;
+          }
+          if (!response.ok) {
+            throw new Error(
+              `Failed to fetch coordinates (status ${response.status})`
+            );
+          }
+          await response.arrayBuffer();
+          updateCoordsStatus("ready");
+        } catch (err) {
+          if (!isMounted.current) {
+            return;
+          }
+          const message =
+            err instanceof Error
+              ? err.message
+              : "Failed to load starting coordinates.";
+          updateCoordsStatus("error", message);
+        }
+      })();
+
+      return prev;
+    });
+  }, [updateCoordsStatus]);
+
+  if (state.status === "loading") {
     return (
       <main className="level-loader">
         <p>Loading level…</p>
@@ -144,7 +181,7 @@ export default function LevelLoaderPage({
     );
   }
 
-  if (notFound) {
+  if (state.status === "not_found") {
     return (
       <main className="level-loader">
         <h1>Level not found</h1>
@@ -156,11 +193,11 @@ export default function LevelLoaderPage({
     );
   }
 
-  if (error) {
+  if (state.status === "error") {
     return (
       <main className="level-loader">
         <h1>Level failed to load</h1>
-        <p>{error}</p>
+        <p>{state.message}</p>
         <Link href="/levels" className="level-loader__back">
           Return to Level Select
         </Link>
@@ -168,16 +205,7 @@ export default function LevelLoaderPage({
     );
   }
 
-  if (!level) {
-    return (
-      <main className="level-loader">
-        <p>Level data unavailable.</p>
-        <Link href="/levels" className="level-loader__back">
-          Return to Level Select
-        </Link>
-      </main>
-    );
-  }
+  const { level, coords, coordsStatus, coordsError } = state;
 
   return (
     <main className="level-loader">
