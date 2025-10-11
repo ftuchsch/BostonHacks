@@ -141,6 +141,8 @@ ROTAMER_LIBRARY = {
 
 HBOND_MAX_DISTANCE = 3.0
 HBOND_MIN_ANGLE = 120.0
+HBOND_GAMMA = 1.0
+HBOND_RESIDUE_CAP = 2
 
 HELIX_PHI_RANGE = (-90.0, -30.0)
 HELIX_PSI_RANGE = (-80.0, -10.0)
@@ -156,6 +158,7 @@ __all__ = [
     "clash_energy",
     "compactness_penalty",
     "detect_ss_labels",
+    "hbond_bonus",
     "ramachandran_penalty",
     "rotamer_penalty",
 ]
@@ -361,42 +364,75 @@ def _in_range(value: float, bounds: tuple[float, float]) -> bool:
     return lower <= value or value <= upper
 
 
-def detect_ss_labels(coords: Iterable[Mapping[str, Any]]) -> str:
-    """Return DSSP-lite secondary structure labels for the provided residues."""
+def _coerce_point(point: Any) -> tuple[float, float, float]:
+    """Return a ``(x, y, z)`` tuple for various point representations."""
 
+    if isinstance(point, Mapping):
+        try:
+            return (float(point["x"]), float(point["y"]), float(point["z"]))
+        except KeyError as exc:  # pragma: no cover - defensive guard
+            raise ValueError("Point mapping must contain 'x', 'y' and 'z'") from exc
+
+    if hasattr(point, "x") and hasattr(point, "y") and hasattr(point, "z"):
+        return (float(getattr(point, "x")), float(getattr(point, "y")), float(getattr(point, "z")))
+
+    try:
+        coords = tuple(float(value) for value in point)
+    except TypeError as exc:  # pragma: no cover - defensive guard
+        raise ValueError("Point must be an iterable of coordinates") from exc
+
+    if len(coords) != 3:
+        raise ValueError("Point coordinate must contain exactly three values")
+    return coords
+
+
+def _prepare_hbond_geometry(
+    coords: Iterable[Mapping[str, Any]]
+) -> tuple[
+    list[dict[str, Any]],
+    list[tuple[int, tuple[float, float, float], tuple[float, float, float]]],
+    list[tuple[int, tuple[float, float, float]]],
+]:
     entries: list[dict[str, Any]] = []
+    donors: list[tuple[int, tuple[float, float, float], tuple[float, float, float]]] = []
+    acceptors: list[tuple[int, tuple[float, float, float]]] = []
+
     for item in coords:
         if "index" not in item:
             raise ValueError("Secondary structure entries require an 'index' field")
         index = int(item["index"])
+        n = item.get("n")
+        h = item.get("h")
+        o = item.get("o")
         entry = {
             "index": index,
             "phi": item.get("phi"),
             "psi": item.get("psi"),
-            "n": item.get("n"),
-            "h": item.get("h"),
-            "o": item.get("o"),
+            "n": n,
+            "h": h,
+            "o": o,
         }
         entries.append(entry)
 
-    if not entries:
-        return ""
+        if n is not None and h is not None:
+            donor_point = _coerce_point(n)
+            hydrogen_point = _coerce_point(h)
+            donors.append((index, donor_point, hydrogen_point))
+        if o is not None:
+            acceptor_point = _coerce_point(o)
+            acceptors.append((index, acceptor_point))
 
     entries.sort(key=lambda e: e["index"])
+    return entries, donors, acceptors
 
-    donors: list[tuple[int, Sequence[float], Sequence[float]]] = []
-    acceptors: list[tuple[int, Sequence[float]]] = []
 
-    for entry in entries:
-        idx = entry["index"]
-        n = entry.get("n")
-        h = entry.get("h")
-        o = entry.get("o")
+def detect_ss_labels(coords: Iterable[Mapping[str, Any]]) -> str:
+    """Return DSSP-lite secondary structure labels for the provided residues."""
 
-        if n is not None and h is not None:
-            donors.append((idx, tuple(float(v) for v in n), tuple(float(v) for v in h)))
-        if o is not None:
-            acceptors.append((idx, tuple(float(v) for v in o)))
+    entries, donors, acceptors = _prepare_hbond_geometry(coords)
+
+    if not entries:
+        return ""
 
     hbond_map: dict[int, set[int]] = {entry["index"]: set() for entry in entries}
 
@@ -438,6 +474,62 @@ def detect_ss_labels(coords: Iterable[Mapping[str, Any]]) -> str:
         labels.append(label)
 
     return "".join(labels)
+
+
+def hbond_bonus(
+    coords: Iterable[Mapping[str, Any]],
+    *,
+    gamma: float = HBOND_GAMMA,
+    per_residue_cap: int = HBOND_RESIDUE_CAP,
+) -> tuple[float, dict[int, float]]:
+    """Return the hydrogen bond bonus and per-residue contributions."""
+
+    if gamma <= 0.0 or per_residue_cap <= 0:
+        return 0.0, {}
+
+    entries, donors, acceptors = _prepare_hbond_geometry(coords)
+    if not donors or not acceptors:
+        return 0.0, {}
+
+    counts: dict[int, int] = {entry["index"]: 0 for entry in entries}
+    contributions: dict[int, float] = {}
+    total_bonus = 0.0
+    seen_pairs: set[tuple[int, int]] = set()
+
+    for donor_idx, donor_pos, hydrogen_pos in donors:
+        for acceptor_idx, acceptor_pos in acceptors:
+            if donor_idx == acceptor_idx:
+                continue
+            key = (min(donor_idx, acceptor_idx), max(donor_idx, acceptor_idx))
+            if key in seen_pairs:
+                continue
+            if counts.get(donor_idx, 0) >= per_residue_cap:
+                continue
+            if counts.get(acceptor_idx, 0) >= per_residue_cap:
+                continue
+
+            distance = _distance(hydrogen_pos, acceptor_pos)
+            if distance > HBOND_MAX_DISTANCE:
+                continue
+            angle = _angle(donor_pos, hydrogen_pos, acceptor_pos)
+            if angle < HBOND_MIN_ANGLE:
+                continue
+
+            seen_pairs.add(key)
+            counts[donor_idx] = counts.get(donor_idx, 0) + 1
+            counts[acceptor_idx] = counts.get(acceptor_idx, 0) + 1
+
+            bonus_share = 0.5 * gamma
+            contributions[donor_idx] = contributions.get(donor_idx, 0.0) + bonus_share
+            contributions[acceptor_idx] = (
+                contributions.get(acceptor_idx, 0.0) + bonus_share
+            )
+            total_bonus += gamma
+
+    if total_bonus == 0.0:
+        return 0.0, {}
+
+    return total_bonus, contributions
 
 
 def _get_atom_attribute(atom: Any, name: str) -> float:
