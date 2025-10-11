@@ -4,6 +4,11 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { ApiError, Level, getLevel } from "../../../lib/api";
+import {
+  type ResidueCoordinate,
+  createLinearBackbone,
+  parseResidueCoordinates,
+} from "../../../lib/structures";
 import { PlayScreen } from "../../../components/PlayScreen";
 
 export default function LevelLoaderPage({
@@ -18,7 +23,7 @@ export default function LevelLoaderPage({
     | {
         status: "ready";
         level: Level;
-        coords: number[][];
+        coords: ResidueCoordinate[];
         coordsStatus: "loading" | "ready" | "error";
         coordsError: string | null;
       };
@@ -31,20 +36,6 @@ export default function LevelLoaderPage({
     return () => {
       isMounted.current = false;
     };
-  }, []);
-
-  const generateBackbone = useCallback((seq: string) => {
-    const points: number[][] = [];
-    const step = 4.31;
-    const nCa = 1.45;
-    const caC = 1.53;
-    for (let index = 0; index < seq.length; index += 1) {
-      const origin = index * step;
-      points.push([origin, 0, 0]);
-      points.push([origin + nCa, 0, 0]);
-      points.push([origin + nCa + caC, 0, 0]);
-    }
-    return points;
   }, []);
 
   const updateCoordsStatus = useCallback(
@@ -74,7 +65,7 @@ export default function LevelLoaderPage({
           return;
         }
 
-        const coords = generateBackbone(lvl.sequence);
+        const coords = createLinearBackbone(lvl.sequence);
         if (cancelled || !isMounted.current) {
           return;
         }
@@ -100,8 +91,25 @@ export default function LevelLoaderPage({
               );
             }
 
-            await response.arrayBuffer(); // drain body quietly
-            updateCoordsStatus("ready");
+            const payload = await response.json();
+            const parsed = parseResidueCoordinates(payload);
+            if (parsed && parsed.length > 0 && isMounted.current && !cancelled) {
+              setState((prev) => {
+                if (prev.status !== "ready") {
+                  return prev;
+                }
+                return {
+                  ...prev,
+                  coords: parsed,
+                };
+              });
+              updateCoordsStatus("ready");
+            } else {
+              updateCoordsStatus(
+                "error",
+                "Starting coordinates were unavailable. Showing a placeholder backbone."
+              );
+            }
           } catch (err) {
             if (cancelled || !isMounted.current) {
               return;
@@ -131,7 +139,7 @@ export default function LevelLoaderPage({
     return () => {
       cancelled = true;
     };
-  }, [generateBackbone, params.id, updateCoordsStatus]);
+  }, [params.id, updateCoordsStatus]);
 
   const handleRetryCoords = useCallback(() => {
     if (!isMounted.current) {
@@ -155,8 +163,25 @@ export default function LevelLoaderPage({
               `Failed to fetch coordinates (status ${response.status})`
             );
           }
-          await response.arrayBuffer();
-          updateCoordsStatus("ready");
+          const payload = await response.json();
+          const parsed = parseResidueCoordinates(payload);
+          if (parsed && parsed.length > 0) {
+            setState((prev) => {
+              if (!isMounted.current || prev.status !== "ready") {
+                return prev;
+              }
+              return {
+                ...prev,
+                coords: parsed,
+              };
+            });
+            updateCoordsStatus("ready");
+          } else {
+            updateCoordsStatus(
+              "error",
+              "Starting coordinates were unavailable. Showing a placeholder backbone."
+            );
+          }
         } catch (err) {
           if (!isMounted.current) {
             return;
