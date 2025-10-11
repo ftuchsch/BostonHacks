@@ -8,6 +8,10 @@ if __package__:
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
     from api import router as api_router
 
+from app.server.nudge import suggest_nudge
+from app.server.score import initialise_weights
+from app.server.stateful import get_state
+
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
 app.add_middleware(
@@ -28,19 +32,10 @@ BASE_PREFIX = "/api"
 
 @app.post(f"{BASE_PREFIX}/nudge")
 async def nudge() -> JSONResponse:
-    """Return a placeholder nudge suggestion."""
-    payload = {
-        "res_idx": 0,
-        "move": {"type": "phi", "delta": 0},
-        "expected_delta_score": 0.0,
-        "explanation": {
-            "clash": 0.0,
-            "rama": 0.0,
-            "rotamer": 0.0,
-            "ss": 0.0,
-            "hbond": 0.0,
-        },
-    }
+    """Return a heuristic nudge suggestion based on the current state."""
+    state = get_state()
+    initialise_weights(state)
+    payload = suggest_nudge(state)
     return JSONResponse(payload)
 
 
