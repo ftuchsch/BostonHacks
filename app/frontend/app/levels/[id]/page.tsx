@@ -19,12 +19,27 @@ export default function LevelLoaderPage({
     "idle" | "loading" | "ready" | "error"
   >("idle");
   const [coordsError, setCoordsError] = useState<string | null>(null);
+  const [coords, setCoords] = useState<number[][] | null>(null);
   const isMounted = useRef(true);
 
   useEffect(() => {
     return () => {
       isMounted.current = false;
     };
+  }, []);
+
+  const generateBackbone = useCallback((seq: string) => {
+    const points: number[][] = [];
+    const step = 4.31;
+    const nCa = 1.45;
+    const caC = 1.53;
+    for (let index = 0; index < seq.length; index += 1) {
+      const origin = index * step;
+      points.push([origin, 0, 0]);
+      points.push([origin + nCa, 0, 0]);
+      points.push([origin + nCa + caC, 0, 0]);
+    }
+    return points;
   }, []);
 
   const fetchCoords = useCallback(
@@ -35,6 +50,7 @@ export default function LevelLoaderPage({
 
       setCoordsStatus("loading");
       setCoordsError(null);
+      setCoords(null);
 
       try {
         const response = await fetch(lvl.start_coords_url);
@@ -53,6 +69,7 @@ export default function LevelLoaderPage({
           return;
         }
 
+        setCoords(generateBackbone(lvl.sequence));
         setCoordsStatus("ready");
       } catch (err) {
         if (isCancelled() || !isMounted.current) {
@@ -65,9 +82,10 @@ export default function LevelLoaderPage({
             ? err.message
             : "Failed to load starting coordinates."
         );
+        setCoords(generateBackbone(lvl.sequence));
       }
     },
-    []
+    [generateBackbone]
   );
 
   useEffect(() => {
@@ -189,7 +207,11 @@ export default function LevelLoaderPage({
       )}
       <section className="level-loader__content">
         <div className="level-loader__play">
-          <PlayScreen />
+          <PlayScreen
+            levelId={level.id}
+            sequence={level.sequence}
+            initialCoords={coords ?? undefined}
+          />
         </div>
         <aside className="level-loader__sidebar">
           <h2>Tips</h2>
