@@ -70,6 +70,7 @@ RAMACHANDRAN_TABLES: Mapping[str, tuple[tuple[float, ...], ...]] = {
 }
 
 ALPHA_ROT = 0.02
+ALPHA_RG = 0.3
 
 
 def _generate_rotamer_bins(chi_count: int) -> tuple[tuple[tuple[float, ...], tuple[float, ...]], ...]:
@@ -153,6 +154,7 @@ SS_WEIGHTS: Mapping[str, float] = {"H": 1.0, "E": 1.0, "C": 0.0}
 
 __all__ = [
     "clash_energy",
+    "compactness_penalty",
     "detect_ss_labels",
     "ramachandran_penalty",
     "rotamer_penalty",
@@ -534,3 +536,34 @@ def clash_energy(
                 total += overlap * overlap
 
     return total
+
+
+def compactness_penalty(
+    coords: Iterable[Sequence[float]], *, alpha: float = ALPHA_RG
+) -> float:
+    """Return the compactness penalty based on the radius of gyration."""
+
+    positions = [tuple(float(value) for value in point) for point in coords]
+    count = len(positions)
+    if count == 0:
+        return 0.0
+
+    if count == 1:
+        rg = 0.0
+    else:
+        sum_x = sum(point[0] for point in positions)
+        sum_y = sum(point[1] for point in positions)
+        sum_z = sum(point[2] for point in positions)
+        centre = (sum_x / count, sum_y / count, sum_z / count)
+
+        moment = 0.0
+        for point in positions:
+            dx = point[0] - centre[0]
+            dy = point[1] - centre[1]
+            dz = point[2] - centre[2]
+            moment += dx * dx + dy * dy + dz * dz
+        rg = sqrt(moment / count)
+
+    target = 2.2 * (count ** (1.0 / 3.0))
+    delta = rg - target
+    return alpha * (delta * delta)
