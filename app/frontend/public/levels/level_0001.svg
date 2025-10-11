@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 240" role="img" aria-labelledby="title desc">
+  <title id="title">Mini Helix Repair preview</title>
+  <desc id="desc">Abstract illustration representing a protein helix challenge.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#151b3d" />
+      <stop offset="100%" stop-color="#1f4c68" />
+    </linearGradient>
+    <linearGradient id="strand" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#ffb347" />
+      <stop offset="100%" stop-color="#ffcc33" />
+    </linearGradient>
+  </defs>
+  <rect width="480" height="240" fill="url(#bg)" rx="16" />
+  <g fill="none" stroke-width="6" stroke-linecap="round">
+    <path d="M50 200 C120 140 140 90 210 130 C280 170 300 120 360 150 C420 180 430 120 430 120" stroke="#6dd5ed" opacity="0.6" />
+    <path d="M60 180 C130 120 150 70 220 110 C290 150 310 100 370 130 C430 160 440 110 440 110" stroke="#f093fb" opacity="0.6" />
+  </g>
+  <g fill="url(#strand)" opacity="0.85">
+    <circle cx="100" cy="120" r="12" />
+    <circle cx="160" cy="90" r="12" />
+    <circle cx="220" cy="130" r="12" />
+    <circle cx="280" cy="110" r="12" />
+    <circle cx="340" cy="140" r="12" />
+    <circle cx="400" cy="120" r="12" />
+  </g>
+  <text x="32" y="48" font-family="'Inter', 'Segoe UI', sans-serif" font-size="32" font-weight="600" fill="#f8fafc">Mini Helix Repair</text>
+  <text x="32" y="78" font-family="'Inter', 'Segoe UI', sans-serif" font-size="18" fill="#cbd5f5">Easy • 24 residues</text>
+</svg>

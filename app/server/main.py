@@ -5,8 +5,10 @@ from fastapi.responses import JSONResponse
 
 if __package__:
     from .api import router as api_router
+    from .routes_levels import router as levels_router
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
     from api import router as api_router
+    from routes_levels import router as levels_router
 
 from app.server.nudge import suggest_nudge
 from app.server.score import initialise_weights
@@ -25,6 +27,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(levels_router)
 app.include_router(api_router)
 
 BASE_PREFIX = "/api"
@@ -43,27 +46,6 @@ async def nudge() -> JSONResponse:
 async def minimize() -> JSONResponse:
     """Return a placeholder minimization response."""
     payload = {"new_atoms": [], "energy": 0.0}
-    return JSONResponse(payload)
-
-
-@app.get(f"{BASE_PREFIX}/levels")
-async def list_levels() -> JSONResponse:
-    """Return a placeholder list of levels."""
-    payload = {"levels": []}
-    return JSONResponse(payload)
-
-
-@app.get(f"{BASE_PREFIX}/levels/{{level_id}}")
-async def get_level(level_id: str) -> JSONResponse:
-    """Return a placeholder level specification."""
-    payload = {
-        "id": level_id,
-        "sequence": "",
-        "start_atoms": [],
-        "target_ss": "",
-        "target_contacts": [],
-        "tips": [],
-    }
     return JSONResponse(payload)
 
 
