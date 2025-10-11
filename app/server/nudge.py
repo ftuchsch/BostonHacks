@@ -16,9 +16,14 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover - gracefully handle missing joblib
     joblib = None  # type: ignore[assignment]
 
-from app.server.features import build_features
-from app.server.score import initialise_weights, local_rescore, score_total
-from app.server.state import PerResScore, Residue, State
+if __package__:
+    from .features import build_features
+    from .score import initialise_weights, local_rescore, score_total
+    from .state import PerResScore, Residue, State
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from features import build_features
+    from score import initialise_weights, local_rescore, score_total
+    from state import PerResScore, Residue, State
 
 
 NUDGE_TERMS = ("clash", "rama", "rotamer", "ss")
@@ -374,4 +379,3 @@ def suggest_nudge(state: State, max_candidates: int = 200) -> Dict[str, object]:
 
 
 __all__ = ["load_delta_model", "suggest_nudge"]
-

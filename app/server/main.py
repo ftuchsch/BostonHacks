@@ -7,15 +7,17 @@ if __package__:
     from .api import router as api_router
     from .routes_levels import router as levels_router
     from .routes_submit import router as submit_router
+    from .nudge import suggest_nudge
+    from .score import initialise_weights
+    from .stateful import get_state
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
     from api import router as api_router
     from routes_levels import router as levels_router
     from routes_submit import router as submit_router
-
-from app.server.nudge import suggest_nudge
-from app.server.score import initialise_weights
-from app.server.stateful import get_state
-
+    from nudge import suggest_nudge
+    from score import initialise_weights
+    from stateful import get_state
+    
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
 app.add_middleware(

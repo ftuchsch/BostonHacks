@@ -8,13 +8,22 @@ from typing import List
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
 
-from .levels import (
-    LevelDataError,
-    LevelNotFoundError,
-    LevelValidationError,
-    load_level,
-    load_level_summaries,
-)
+if __package__:
+    from .levels import (
+        LevelDataError,
+        LevelNotFoundError,
+        LevelValidationError,
+        load_level,
+        load_level_summaries,
+    )
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from levels import (
+        LevelDataError,
+        LevelNotFoundError,
+        LevelValidationError,
+        load_level,
+        load_level_summaries,
+    )
 
 LOGGER = logging.getLogger(__name__)
 

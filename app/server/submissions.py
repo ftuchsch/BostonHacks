@@ -14,9 +14,14 @@ from typing import Iterable, Iterator, List, Mapping, MutableMapping, Sequence
 
 from fastapi import HTTPException
 
-from app.server.score import initialise_weights, score_total
-from app.server.score_math import SCORE_WEIGHTS
-from app.server.state import Atom, Residue, State
+if __package__:
+    from .score import initialise_weights, score_total
+    from .score_math import SCORE_WEIGHTS
+    from .state import Atom, Residue, State
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from score import initialise_weights, score_total
+    from score_math import SCORE_WEIGHTS
+    from state import Atom, Residue, State
 
 Coords = List[tuple[float, float, float]]
 
@@ -362,4 +367,3 @@ __all__ = [
     "validate_geometry",
     "validate_elapsed_ms",
 ]
-

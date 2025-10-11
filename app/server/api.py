@@ -2,21 +2,34 @@
 
 from __future__ import annotations
 
-from typing import Dict, List
+import math
+from typing import Dict, List, Tuple
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.server.score import initialise_weights, local_rescore, score_total
-from app.server.scoring import (
-    SS_WEIGHTS,
-    clash_energy,
-    compactness_penalty,
-    detect_ss_labels,
-    hbond_bonus,
-    rotamer_penalty,
-)
-from app.server.stateful import get_state
+if __package__:
+    from .score import initialise_weights, local_rescore, score_total
+    from .scoring import (
+        SS_WEIGHTS,
+        clash_energy,
+        compactness_penalty,
+        detect_ss_labels,
+        hbond_bonus,
+        rotamer_penalty,
+    )
+    from .stateful import get_state
+else:  # pragma: no cover - allows running ``uvicorn main:app`` locally
+    from score import initialise_weights, local_rescore, score_total
+    from scoring import (
+        SS_WEIGHTS,
+        clash_energy,
+        compactness_penalty,
+        detect_ss_labels,
+        hbond_bonus,
+        rotamer_penalty,
+    )
+    from stateful import get_state
 
 router = APIRouter()
 
@@ -50,6 +63,7 @@ class ResidueState(BaseModel):
 
 class ScoreRequest(BaseModel):
     payload: dict = {}
+    diff: dict | None = None
     atoms: List[AtomPayload] | None = None
     residues: List[ResidueState] | None = None
     target_ss: str | None = None
@@ -136,6 +150,109 @@ def _legacy_score(request: ScoreRequest) -> Dict[str, object]:
     }
 
 
+def _capture_coords(residue) -> Dict[str, Tuple[float, float, float]]:
+    return {atom.id[1]: atom.xyz for atom in residue.atoms}
+
+
+def _apply_phi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
+    origin = coords.get("N")
+    if origin is None:
+        return {}
+    radians = math.radians(delta)
+    amplitude = 0.35
+    dx = amplitude * math.cos(radians)
+    dy = amplitude * math.sin(radians)
+    return {"N": (origin[0] + dx, origin[1] + dy, origin[2])}
+
+
+def _apply_psi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
+    origin = coords.get("N")
+    if origin is None:
+        return {}
+    radians = math.radians(delta)
+    amplitude = 0.35
+    dy = amplitude * math.cos(radians)
+    dz = amplitude * math.sin(radians)
+    return {"N": (origin[0], origin[1] + dy, origin[2] + dz)}
+
+
+def _apply_rotamer(coords: Dict[str, Tuple[float, float, float]], rotamer_id: int) -> Dict[str, Tuple[float, float, float]]:
+    origin = coords.get("N")
+    ca = coords.get("CA")
+    if origin is None:
+        return {}
+    direction = -0.4 if rotamer_id == 0 else 0.4
+    updates = {"N": (origin[0] + direction, origin[1], origin[2] + 0.5 * direction)}
+    if ca is not None:
+        updates["CA"] = (ca[0] - 0.25 * direction, ca[1] + 0.25 * direction, ca[2])
+    return updates
+
+
+def _coerce_vector(value) -> Tuple[float, float, float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError("coordinate must be an array of three numbers")
+    try:
+        return (float(value[0]), float(value[1]), float(value[2]))
+    except (TypeError, ValueError):
+        raise ValueError("coordinate components must be numeric")
+
+
+def _diff_updates(state, diff: Dict[str, object]) -> Tuple[int, Dict[str, Tuple[float, float, float]]]:
+    try:
+        res_idx = int(diff["res_idx"])
+    except Exception as exc:  # pragma: no cover - defensive guard
+        raise HTTPException(status_code=400, detail=f"Invalid diff payload: {exc}")
+
+    residue = state.residues.get(res_idx)
+    if residue is None:
+        raise HTTPException(status_code=404, detail=f"Residue {res_idx} not found")
+
+    move = diff.get("move")
+    if not isinstance(move, dict):
+        raise HTTPException(status_code=400, detail="diff.move must be an object")
+
+    coords = _capture_coords(residue)
+    updates: Dict[str, Tuple[float, float, float]] = {}
+
+    move_type = move.get("type")
+    if isinstance(move_type, str):
+        move_type = move_type.lower()
+
+    if move_type == "torsion":
+        delta = move.get("delta")
+        if isinstance(delta, dict):
+            phi = delta.get("phi")
+            psi = delta.get("psi")
+            if phi is not None:
+                try:
+                    updates.update(_apply_phi(coords, float(phi)))
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=f"Invalid phi delta: {exc}") from exc
+            if psi is not None:
+                try:
+                    updates.update(_apply_psi(coords, float(psi)))
+                except (TypeError, ValueError) as exc:
+                    raise HTTPException(status_code=400, detail=f"Invalid psi delta: {exc}") from exc
+    elif move_type == "rotamer":
+        rotamer_id = move.get("rotamer_id", 0)
+        try:
+            updates.update(_apply_rotamer(coords, int(rotamer_id)))
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid rotamer id: {exc}") from exc
+    else:
+        for name, value in move.items():
+            if not isinstance(name, str):
+                continue
+            if name == "type":
+                continue
+            try:
+                updates[name] = _coerce_vector(value)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid atom update for {name}: {exc}") from exc
+
+    return res_idx, updates
+
+
 @router.post("/api/score")
 async def api_score(req: ScoreRequest):
     state = get_state()
@@ -148,19 +265,14 @@ async def api_score(req: ScoreRequest):
         result = _legacy_score(req)
     else:
         payload = req.payload or {}
-        diff = payload.get("diff")
+        diff = payload.get("diff") or req.diff
         if diff:
-            try:
-                res_idx = int(diff["res_idx"])
-                move: Dict[str, List[float]] = diff["move"]
-            except Exception as exc:  # pragma: no cover - defensive programming
-                raise HTTPException(status_code=400, detail=f"Invalid diff payload: {exc}")
-            new_xyz = {
-                name: (float(coords[0]), float(coords[1]), float(coords[2]))
-                for name, coords in move.items()
-            }
-            state.update_residue_coords(res_idx, new_xyz)
-            result = local_rescore(state, {res_idx})
+            res_idx, updates = _diff_updates(state, diff)
+            if updates:
+                state.update_residue_coords(res_idx, updates)
+                result = local_rescore(state, {res_idx})
+            else:
+                result = score_total(state)
         else:
             result = score_total(state)
     result["stats"] = {
@@ -172,4 +284,3 @@ async def api_score(req: ScoreRequest):
 
 
 __all__ = ["router"]
-

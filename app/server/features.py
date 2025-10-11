@@ -33,8 +33,12 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for stripped-down env
 
     np = _NPModule()  # type: ignore[assignment]
 
-from app.server.score import compute_per_residue_terms
-from app.server.state import Residue, State
+if __package__:
+    from .score import compute_per_residue_terms
+    from .state import Residue, State
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from score import compute_per_residue_terms
+    from state import Residue, State
 
 AA_ORDER: tuple[str, ...] = (
     "ALA",

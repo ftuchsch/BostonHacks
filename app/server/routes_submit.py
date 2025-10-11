@@ -7,19 +7,34 @@ from typing import List
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from app.server.levels import LevelNotFoundError, LevelValidationError, load_level
-from app.server.submissions import (
-    SubmissionStorageError,
-    ensure_payload_shapes,
-    make_submission_entry,
-    persist_submission,
-    rescore,
-    sanitise_client_version,
-    sanitise_player_name,
-    sort_entries,
-    validate_elapsed_ms,
-    validate_geometry,
-)
+if __package__:
+    from .levels import LevelNotFoundError, LevelValidationError, load_level
+    from .submissions import (
+        SubmissionStorageError,
+        ensure_payload_shapes,
+        make_submission_entry,
+        persist_submission,
+        rescore,
+        sanitise_client_version,
+        sanitise_player_name,
+        sort_entries,
+        validate_elapsed_ms,
+        validate_geometry,
+    )
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from levels import LevelNotFoundError, LevelValidationError, load_level
+    from submissions import (
+        SubmissionStorageError,
+        ensure_payload_shapes,
+        make_submission_entry,
+        persist_submission,
+        rescore,
+        sanitise_client_version,
+        sanitise_player_name,
+        sort_entries,
+        validate_elapsed_ms,
+        validate_geometry,
+    )
 
 router = APIRouter(prefix="/api", tags=["submit"])
 
@@ -139,7 +154,10 @@ async def leaderboard(
             detail={"code": "level_invalid", "details": exc.details},
         ) from exc
 
-    from app.server.submissions import path_for_level, read_entries  # local import to avoid cycle
+    if __package__:
+        from .submissions import path_for_level, read_entries  # local import to avoid cycle
+    else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+        from submissions import path_for_level, read_entries  # local import to avoid cycle
 
     path = path_for_level(level_id)
     entries = read_entries(path)
@@ -168,4 +186,3 @@ __all__ = [
     "SubmitResponse",
     "router",
 ]
-

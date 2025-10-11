@@ -5,8 +5,12 @@ from __future__ import annotations
 from typing import Dict, Set, List, Any
 import math
 
-from app.server.score_math import SCORE_WEIGHTS
-from app.server.state import State, Residue, PerResScore
+if __package__:
+    from .score_math import SCORE_WEIGHTS
+    from .state import State, Residue, PerResScore
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from score_math import SCORE_WEIGHTS
+    from state import State, Residue, PerResScore
 
 PAIR_TERMS = {"clash", "compact", "hbond"}
 SINGLE_TERMS = {"rama", "rotamer", "ss"}
@@ -130,4 +134,3 @@ __all__ = [
     "local_rescore",
     "initialise_weights",
 ]
-
