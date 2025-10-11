@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from math import sqrt
+from math import exp, floor, log, sqrt
 from typing import Any, Mapping
 
 # Van der Waals radii in Ångström pulled from the score spec (02_SCORE_MATH.md §1).
@@ -14,7 +14,129 @@ VAN_DER_WAALS_RADII: Mapping[str, float] = {
     "H": 1.10,
 }
 
-__all__ = ["clash_energy"]
+RAMA_BIN_SIZE = 10.0
+RAMA_BIN_COUNT = 36
+RAMA_MAX_PENALTY = 10.0
+RAMA_MIN_PROBABILITY = 1.0e-6
+
+# Bin centres for the coarse Ramachandran histograms (10° bins spanning [-180, 180)).
+RAMA_BIN_CENTERS: tuple[float, ...] = tuple(
+    -180.0 + (index + 0.5) * RAMA_BIN_SIZE for index in range(RAMA_BIN_COUNT)
+)
+
+# Synthetic Ramachandran histograms approximating the common α/β basins.
+# Values are probabilities capped to [RAMA_MIN_PROBABILITY, 1.0]. The precise
+# shapes are less important than having realistic hotspots for interpolation
+# during unit tests.
+_RAMA_COMPONENTS: Mapping[str, tuple[tuple[float, float, float, float, float], ...]] = {
+    "general": (
+        (-60.0, -40.0, 22.0, 18.0, 0.55),  # right-handed α-helix basin
+        (-120.0, 130.0, 25.0, 22.0, 0.35),  # β-sheet basin
+        (60.0, 40.0, 18.0, 20.0, 0.20),  # left-handed α region
+    ),
+    "gly": (
+        (-80.0, 0.0, 25.0, 22.0, 0.45),
+        (80.0, 0.0, 25.0, 20.0, 0.45),
+        (-150.0, 150.0, 28.0, 24.0, 0.30),
+    ),
+    "pro": (
+        (-65.0, 140.0, 18.0, 18.0, 0.60),
+        (-80.0, -35.0, 16.0, 20.0, 0.25),
+    ),
+}
+
+
+def _build_ramachandran_table(
+    components: tuple[tuple[float, float, float, float, float], ...]
+) -> tuple[tuple[float, ...], ...]:
+    table: list[tuple[float, ...]] = []
+    for phi_center in RAMA_BIN_CENTERS:
+        row: list[float] = []
+        for psi_center in RAMA_BIN_CENTERS:
+            probability = RAMA_MIN_PROBABILITY
+            for phi0, psi0, sigma_phi, sigma_psi, weight in components:
+                d_phi = (phi_center - phi0) / sigma_phi
+                d_psi = (psi_center - psi0) / sigma_psi
+                exponent = -0.5 * (d_phi * d_phi + d_psi * d_psi)
+                probability += weight * exp(exponent)
+            row.append(min(probability, 1.0))
+        table.append(tuple(row))
+    return tuple(table)
+
+
+RAMACHANDRAN_TABLES: Mapping[str, tuple[tuple[float, ...], ...]] = {
+    key: _build_ramachandran_table(components)
+    for key, components in _RAMA_COMPONENTS.items()
+}
+
+__all__ = ["clash_energy", "ramachandran_penalty"]
+
+
+def _wrap_angle(angle: float) -> float:
+    """Wrap an angle into the [-180°, 180°) domain."""
+
+    return ((angle + 180.0) % 360.0) - 180.0
+
+
+def _interpolation_indices(angle: float) -> tuple[int, int, float]:
+    """Return lower/upper bin indices and interpolation weight for an angle."""
+
+    coord = ((angle + 180.0) / RAMA_BIN_SIZE) - 0.5
+    lower = floor(coord)
+    fraction = coord - lower
+    lower_index = lower % RAMA_BIN_COUNT
+    upper_index = (lower_index + 1) % RAMA_BIN_COUNT
+    return lower_index, upper_index, fraction
+
+
+def ramachandran_penalty(
+    phi: float,
+    psi: float,
+    *,
+    residue_type: str = "general",
+) -> float:
+    """Compute the Ramachandran penalty for a residue.
+
+    The implementation follows 02_SCORE_MATH.md §2. For the appropriate residue
+    type (general, glycine, or proline) a coarse 10°×10° histogram is used and
+    bilinear interpolation between bin centres estimates the probability at the
+    requested `(φ, ψ)` pair. The penalty is the negative natural logarithm of
+    that probability, clipped to ``[0, RAMA_MAX_PENALTY]``.
+    """
+
+    key = residue_type.lower()
+    try:
+        table = RAMACHANDRAN_TABLES[key]
+    except KeyError as exc:
+        valid = ", ".join(sorted(RAMACHANDRAN_TABLES))
+        raise ValueError(
+            f"Unknown residue type '{residue_type}' for Ramachandran lookup; "
+            f"expected one of {valid}"
+        ) from exc
+
+    wrapped_phi = _wrap_angle(float(phi))
+    wrapped_psi = _wrap_angle(float(psi))
+
+    phi_lower, phi_upper, phi_weight = _interpolation_indices(wrapped_phi)
+    psi_lower, psi_upper, psi_weight = _interpolation_indices(wrapped_psi)
+
+    v00 = table[phi_lower][psi_lower]
+    v10 = table[phi_upper][psi_lower]
+    v01 = table[phi_lower][psi_upper]
+    v11 = table[phi_upper][psi_upper]
+
+    prob = (
+        (1.0 - phi_weight) * (1.0 - psi_weight) * v00
+        + phi_weight * (1.0 - psi_weight) * v10
+        + (1.0 - phi_weight) * psi_weight * v01
+        + phi_weight * psi_weight * v11
+    )
+
+    prob = max(min(prob, 1.0), RAMA_MIN_PROBABILITY)
+    penalty = -log(prob)
+    if penalty < 0.0:
+        penalty = 0.0
+    return min(penalty, RAMA_MAX_PENALTY)
 
 
 def _get_atom_attribute(atom: Any, name: str) -> float:
