@@ -1,0 +1,25 @@
+{
+  "id": "beta_hairpin_01",
+  "name": "\u03b2\u2011hairpin fixer",
+  "sequence": "GGGGGGGGGGALALALALGGGGGGGGGG",
+  "start_coords_url": "10_DATA_SAMPLES/sample_level_start.pdb",
+  "target_ss": "CCCCCHHHHCCCCEEECCCC",
+  "target_contacts": [
+    [
+      12,
+      19
+    ],
+    [
+      13,
+      18
+    ],
+    [
+      14,
+      17
+    ]
+  ],
+  "initial_tips": [
+    "Try tightening the turn around residues 10\u201312.",
+    "Side chain at 18 may clash with 13."
+  ]
+}
