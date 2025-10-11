@@ -3,7 +3,10 @@ from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from .scoring import clash_energy
+if __package__:
+    from .scoring import clash_energy
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from scoring import clash_energy
 
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
