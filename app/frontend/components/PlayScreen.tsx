@@ -19,11 +19,13 @@ import {
   type ScoreTerms,
   type SubmitResponse,
 } from "../lib/api";
+import type { ResidueCoordinate } from "../lib/structures";
 import { ResidueHeatmapOverlay } from "./ResidueHeatmapOverlay";
 import { ResiduePanel } from "./ResiduePanel";
 import { ScoreBars } from "./ScoreBars";
 import { AINudgeButton } from "./AINudgeButton";
 import type { NudgeSuggestion } from "./AINudgeTooltip";
+import { ProteinViewer } from "./ProteinViewer";
 import { SubmitButton } from "./SubmitButton";
 
 type WorkerMessage =
@@ -84,7 +86,7 @@ const fallbackHeatmap = (response: ScoreResponse) =>
 type PlayScreenProps = {
   levelId?: string;
   sequence?: string;
-  initialCoords?: number[][];
+  initialCoords?: ResidueCoordinate[];
   playerName?: string;
 };
 
@@ -141,12 +143,16 @@ export const PlayScreen = ({
     null
   );
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
-  const structureCoords = useMemo(
+  const structureResidues = useMemo(
     () => initialCoords ?? null,
     [initialCoords]
   );
+    const submitCoords = useMemo(
+    () => structureResidues?.map((residue) => residue.coords) ?? [],
+    [structureResidues]
+  );
   const structureLoaded = Boolean(
-    levelId && sequence && structureCoords && structureCoords.length > 0
+    levelId && sequence && structureResidues && structureResidues.length > 0
   );
   const computeElapsedMs = useCallback(
     () => Date.now() - levelStartRef.current,
@@ -605,7 +611,7 @@ export const PlayScreen = ({
               <SubmitButton
                 levelId={levelId ?? ""}
                 sequence={sequence ?? ""}
-                coords={structureCoords ?? []}
+                coords={submitCoords}
                 elapsedMs={computeElapsedMs}
                 playerName={playerName}
                 disabled={!structureLoaded || isScoring}
@@ -614,6 +620,13 @@ export const PlayScreen = ({
               />
             </div>
           </header>
+          <div className="play-screen__scene">
+            <ProteinViewer
+              residues={structureResidues ?? []}
+              selectedResidue={selectedResidue}
+              onSelectResidue={handleResidueSelect}
+            />
+          </div>
           <div className="play-screen__controls">
             <label className="play-screen__control">
               <span>φ (Phi)</span>
@@ -756,6 +769,13 @@ export const PlayScreen = ({
           align-items: center;
           gap: 0.75rem;
         }
+
+        .play-screen__scene {
+          width: 100%;
+          aspect-ratio: 16 / 10;
+          min-height: 18rem;
+        }
+
 
         .play-screen__viewer-header h1 {
           margin: 0;
