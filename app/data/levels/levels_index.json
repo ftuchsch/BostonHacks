@@ -1,0 +1,14 @@
+[
+  {
+    "id": "level_0001",
+    "name": "Mini Helix Repair",
+    "difficulty": "easy",
+    "length": 24,
+    "preview_img_url": "/levels/level_0001.svg",
+    "tags": [
+      "helix",
+      "clash"
+    ],
+    "short_desc": "Fix a small helix kink and reduce clashes."
+  }
+]

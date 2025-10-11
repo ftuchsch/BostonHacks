@@ -1,0 +1,27 @@
+{
+  "id": "level_0001",
+  "name": "Mini Helix Repair",
+  "difficulty": "easy",
+  "length": 24,
+  "sequence": "MKVIFQLAAERDKYKQLVEMAEQL",
+  "start_coords_url": "/levels/level_0001_start.json",
+  "target_ss": "HHHHHHHHHHCCCCEEEECCCCCC",
+  "target_contacts": [
+    {
+      "i": 4,
+      "j": 17,
+      "type": "hydrophobic"
+    },
+    {
+      "i": 8,
+      "j": 15,
+      "type": "hb"
+    }
+  ],
+  "tips": [
+    "Look for clashes near residue 14.",
+    "Try \u221210\u00b0 on \u03c6 for residue 15 if stuck."
+  ],
+  "preview_img_url": "/levels/level_0001.svg",
+  "version": 1
+}

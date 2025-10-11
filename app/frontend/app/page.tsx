@@ -13,9 +13,14 @@ export default function LandingPage() {
           design notes, test out the interface, and help us iterate on the
           experience.
         </p>
-        <Link className="cta" href="/play">
-          Start Playing
-        </Link>
+        <div className="landing-actions">
+          <Link className="cta" href="/play">
+            Quick Play
+          </Link>
+          <Link className="cta secondary" href="/levels">
+            Browse Levels
+          </Link>
+        </div>
       </section>
     </main>
   );
