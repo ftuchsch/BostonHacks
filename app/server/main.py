@@ -1,19 +1,43 @@
 """FastAPI entry point for the FoldIt prototype server."""
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
+
+if __package__:
+    from .scoring import clash_energy
+else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
+    from scoring import clash_energy
 
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
 BASE_PREFIX = "/api"
 
 
+class Atom(BaseModel):
+    """Minimal atom representation for scoring."""
+
+    element: str
+    x: float
+    y: float
+    z: float
+
+
+class ScoreRequest(BaseModel):
+    """Request payload for scoring computations."""
+
+    atoms: list[Atom]
+
+
 @app.post(f"{BASE_PREFIX}/score")
-async def score() -> JSONResponse:
-    """Return a placeholder score response."""
+async def score(request: ScoreRequest) -> JSONResponse:
+    """Compute score terms for the provided atoms."""
+
+    clash = clash_energy(request.atoms)
+    total_score = 1000.0 - clash
     payload = {
-        "score": 0.0,
+        "score": total_score,
         "terms": {
-            "clash": 0.0,
+            "clash": clash,
             "rama": 0.0,
             "rotamer": 0.0,
             "ss": 0.0,
