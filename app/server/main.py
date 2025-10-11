@@ -1,5 +1,6 @@
 """FastAPI entry point for the FoldIt prototype server."""
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -23,6 +24,17 @@ else:  # pragma: no cover - allows running ``uvicorn main:app`` from this direct
     )
 
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 BASE_PREFIX = "/api"
 
