@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "dev-back": "uvicorn app.server.main:app --reload",
+    "train-delta": "python -m app.server.train_delta_score",
+    "tests": "pytest -v"
   },
   "dependencies": {
     "next": "14.2.5",
