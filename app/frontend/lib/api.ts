@@ -21,6 +21,36 @@ export type ScoreResponse = {
   per_residue: PerResidueTerm[];
 };
 
+export type SubmitRequest = {
+  level_id: string;
+  sequence: string;
+  coords: number[][];
+  elapsed_ms?: number;
+  player_name?: string;
+  client_version?: string;
+};
+
+export type SubmitResponse = {
+  score: number;
+  terms: ScoreTerms;
+  rank: number;
+  entries: number;
+};
+
+export type LeaderboardItem = {
+  rank: number;
+  player_name: string;
+  score: number;
+  elapsed_ms?: number;
+  ts: string;
+};
+
+export type LeaderboardResponse = {
+  level_id: string;
+  items: LeaderboardItem[];
+  total_entries: number;
+};
+
 export type NudgeMove =
   | {
       type: "torsion";
@@ -155,6 +185,8 @@ export async function getLevel(id: string): Promise<Level> {
 
 const SCORE_ENDPOINT = "/api/score";
 const NUDGE_ENDPOINT = "/api/nudge";
+const SUBMIT_ENDPOINT = "/api/submit";
+const LEADERBOARD_ENDPOINT = "/api/leaderboard";
 
 export async function score(body: ScoreRequestBody): Promise<ScoreResponse> {
   const response = await fetch(SCORE_ENDPOINT, {
@@ -188,6 +220,41 @@ export async function nudge(): Promise<NudgeResponse> {
 
   const payload = (await response.json()) as NudgeResponse;
   return payload;
+}
+
+export async function submit(payload: SubmitRequest): Promise<SubmitResponse> {
+  const response = await fetch(SUBMIT_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  return handleJsonResponse<SubmitResponse>(response, "Submission failed");
+}
+
+export async function getLeaderboard(
+  levelId: string,
+  params: { limit?: number; offset?: number } = {}
+): Promise<LeaderboardResponse> {
+  const query = new URLSearchParams({ level_id: levelId });
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+
+  const response = await fetch(`${LEADERBOARD_ENDPOINT}?${query.toString()}`, {
+    headers: { Accept: "application/json" },
+    cache: "no-store",
+  });
+
+  return handleJsonResponse<LeaderboardResponse>(
+    response,
+    `Failed to load leaderboard for ${levelId}`
+  );
 }
 
 export type HeatmapPayload = {

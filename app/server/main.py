@@ -6,9 +6,11 @@ from fastapi.responses import JSONResponse
 if __package__:
     from .api import router as api_router
     from .routes_levels import router as levels_router
+    from .routes_submit import router as submit_router
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
     from api import router as api_router
     from routes_levels import router as levels_router
+    from routes_submit import router as submit_router
 
 from app.server.nudge import suggest_nudge
 from app.server.score import initialise_weights
@@ -29,6 +31,7 @@ app.add_middleware(
 
 app.include_router(levels_router)
 app.include_router(api_router)
+app.include_router(submit_router)
 
 BASE_PREFIX = "/api"
 
@@ -49,15 +52,5 @@ async def minimize() -> JSONResponse:
     return JSONResponse(payload)
 
 
-@app.post(f"{BASE_PREFIX}/submit")
-async def submit() -> JSONResponse:
-    """Return a placeholder submission acknowledgement."""
-    payload = {"status": "received", "score": 0.0}
-    return JSONResponse(payload)
-
-
-@app.get(f"{BASE_PREFIX}/leaderboard")
-async def leaderboard(level_id: str | None = None) -> JSONResponse:
-    """Return a placeholder leaderboard."""
-    payload = {"level_id": level_id, "entries": []}
-    return JSONResponse(payload)
+# The dedicated routers registered above expose the ``/api/submit`` and
+# ``/api/leaderboard`` endpoints.

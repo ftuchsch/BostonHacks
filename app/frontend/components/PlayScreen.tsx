@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import {
   useCallback,
   useEffect,
@@ -16,12 +17,14 @@ import {
   type ScoreDiff,
   type ScoreResponse,
   type ScoreTerms,
+  type SubmitResponse,
 } from "../lib/api";
 import { ResidueHeatmapOverlay } from "./ResidueHeatmapOverlay";
 import { ResiduePanel } from "./ResiduePanel";
 import { ScoreBars } from "./ScoreBars";
 import { AINudgeButton } from "./AINudgeButton";
 import type { NudgeSuggestion } from "./AINudgeTooltip";
+import { SubmitButton } from "./SubmitButton";
 
 type WorkerMessage =
   | {
@@ -78,7 +81,20 @@ const useDebouncedCallback = <Args extends unknown[]>(
 const fallbackHeatmap = (response: ScoreResponse) =>
   calculateHeatmap(response.per_residue).values;
 
-export const PlayScreen = () => {
+type PlayScreenProps = {
+  levelId?: string;
+  sequence?: string;
+  initialCoords?: number[][];
+  playerName?: string;
+};
+
+export const PlayScreen = ({
+  levelId,
+  sequence,
+  initialCoords,
+  playerName,
+}: PlayScreenProps) => {
+  const router = useRouter();
   const [selectedResidue, setSelectedResidue] = useState<number | null>(null);
   const [angles, setAngles] = useState<Angles>(INITIAL_ANGLES);
   const [rotamerId, setRotamerId] = useState<number | null>(null);
@@ -119,6 +135,51 @@ export const PlayScreen = () => {
   const residueHighlightTimeoutRef = useRef<number | null>(null);
   const pendingHighlightResidueRef = useRef<number | null>(null);
   const nudgeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const levelStartRef = useRef<number>(Date.now());
+  const [submissionResult, setSubmissionResult] = useState<SubmitResponse | null>(
+    null
+  );
+  const [submitModalOpen, setSubmitModalOpen] = useState(false);
+  const structureCoords = useMemo(
+    () => initialCoords ?? null,
+    [initialCoords]
+  );
+  const structureLoaded = Boolean(
+    levelId && sequence && structureCoords && structureCoords.length > 0
+  );
+  const computeElapsedMs = useCallback(
+    () => Date.now() - levelStartRef.current,
+    []
+  );
+
+  const handleSubmitSuccess = useCallback((response: SubmitResponse) => {
+    setSubmissionResult(response);
+    setSubmitModalOpen(true);
+    setToastMessage(null);
+  }, []);
+
+  const handleSubmitError = useCallback(
+    (message: string, detail?: unknown) => {
+      let display = message;
+      if (detail && typeof detail === "object" && detail !== null) {
+        const payload = detail as { detail?: unknown };
+        if (payload.detail && typeof payload.detail === "object") {
+          const inner = payload.detail as Record<string, unknown>;
+          if (Array.isArray(inner.errors) && inner.errors.length > 0) {
+            display = inner.errors.slice(0, 3).join("; ");
+          } else if (typeof inner.message === "string") {
+            display = inner.message;
+          }
+        }
+      }
+      setToastMessage(display);
+    },
+    []
+  );
+
+  const handleModalClose = useCallback(() => {
+    setSubmitModalOpen(false);
+  }, []);
 
   const handleInteractionPulse = useCallback(() => {
     interactingRef.current = true;
@@ -526,16 +587,28 @@ export const PlayScreen = () => {
               <h1>Folding Workspace</h1>
               {isScoring ? <span className="play-screen__badge">Scoring…</span> : null}
             </div>
-            <AINudgeButton
-              anchorRef={nudgeButtonRef}
-              disabled={isScoring || Boolean(nudgeState.suggestion)}
-              loading={nudgeState.loading}
-              applying={nudgeState.applying}
-              suggestion={nudgeState.suggestion}
-              onRequest={handleNudgeRequest}
-              onConfirm={handleNudgeConfirm}
-              onCancel={handleNudgeCancel}
-            />
+            <div className="play-screen__viewer-actions">
+              <AINudgeButton
+                anchorRef={nudgeButtonRef}
+                disabled={isScoring || Boolean(nudgeState.suggestion)}
+                loading={nudgeState.loading}
+                applying={nudgeState.applying}
+                suggestion={nudgeState.suggestion}
+                onRequest={handleNudgeRequest}
+                onConfirm={handleNudgeConfirm}
+                onCancel={handleNudgeCancel}
+              />
+              <SubmitButton
+                levelId={levelId ?? ""}
+                sequence={sequence ?? ""}
+                coords={structureCoords ?? []}
+                elapsedMs={computeElapsedMs}
+                playerName={playerName}
+                disabled={!structureLoaded || isScoring}
+                onSuccess={handleSubmitSuccess}
+                onError={handleSubmitError}
+              />
+            </div>
           </header>
           <div className="play-screen__controls">
             <label className="play-screen__control">
@@ -602,6 +675,36 @@ export const PlayScreen = () => {
           />
         </div>
       </div>
+      {submitModalOpen && submissionResult ? (
+        <div className="submit-modal" role="dialog" aria-modal="true">
+          <div className="submit-modal__backdrop" onClick={handleModalClose} />
+          <div className="submit-modal__card">
+            <h2>Submitted!</h2>
+            <p>
+              Score {submissionResult.score.toFixed(2)} (rank #{submissionResult.rank} of
+              {" "}
+              {submissionResult.entries})
+            </p>
+            <div className="submit-modal__actions">
+              <button type="button" onClick={handleModalClose}>
+                Close
+              </button>
+              {levelId ? (
+                <button
+                  type="button"
+                  className="submit-modal__primary"
+                  onClick={() => {
+                    setSubmitModalOpen(false);
+                    router.push(`/leaderboard/${levelId}`);
+                  }}
+                >
+                  View Leaderboard
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
       {toastMessage ? <div className="play-screen__toast">{toastMessage}</div> : null}
       <style jsx>{`
         .play-screen {
@@ -639,6 +742,12 @@ export const PlayScreen = () => {
         }
 
         .play-screen__viewer-title {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+        }
+
+        .play-screen__viewer-actions {
           display: flex;
           align-items: center;
           gap: 0.75rem;
@@ -697,6 +806,67 @@ export const PlayScreen = () => {
           background: rgba(248, 113, 113, 0.16);
           color: #fca5a5;
           font-size: 0.95rem;
+        }
+
+        .submit-modal {
+          position: fixed;
+          inset: 0;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          z-index: 20;
+        }
+
+        .submit-modal__backdrop {
+          position: absolute;
+          inset: 0;
+          background: rgba(15, 23, 42, 0.8);
+        }
+
+        .submit-modal__card {
+          position: relative;
+          background: rgba(15, 23, 42, 0.95);
+          border-radius: 1rem;
+          padding: 1.5rem;
+          box-shadow: 0 20px 45px rgba(15, 23, 42, 0.5);
+          border: 1px solid rgba(148, 163, 184, 0.2);
+          min-width: 320px;
+          max-width: 90vw;
+        }
+
+        .submit-modal__card h2 {
+          margin-top: 0;
+          margin-bottom: 0.5rem;
+        }
+
+        .submit-modal__card p {
+          margin: 0 0 1rem;
+          font-variant-numeric: tabular-nums;
+        }
+
+        .submit-modal__actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 0.75rem;
+        }
+
+        .submit-modal__actions button {
+          padding: 0.5rem 1rem;
+          border-radius: 9999px;
+          border: none;
+          background: rgba(148, 163, 184, 0.2);
+          color: #e2e8f0;
+          cursor: pointer;
+        }
+
+        .submit-modal__actions button:hover {
+          background: rgba(148, 163, 184, 0.3);
+        }
+
+        .submit-modal__primary {
+          background: linear-gradient(135deg, #38bdf8, #6366f1);
+          color: #0f172a;
+          font-weight: 600;
         }
 
         @media (max-width: 1024px) {
