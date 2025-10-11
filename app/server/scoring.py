@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
-from math import exp, floor, log, sqrt
-from typing import Any, Mapping
+from math import acos, degrees, exp, floor, log, sqrt
+from typing import Any, Mapping, Sequence
 
 # Van der Waals radii in Ångström pulled from the score spec (02_SCORE_MATH.md §1).
 VAN_DER_WAALS_RADII: Mapping[str, float] = {
@@ -138,7 +138,25 @@ ROTAMER_LIBRARY = {
 }
 
 
-__all__ = ["clash_energy", "ramachandran_penalty", "rotamer_penalty"]
+HBOND_MAX_DISTANCE = 3.0
+HBOND_MIN_ANGLE = 120.0
+
+HELIX_PHI_RANGE = (-90.0, -30.0)
+HELIX_PSI_RANGE = (-80.0, -10.0)
+HELIX_HBOND_RANGE = (3, 5)
+
+STRAND_PHI_RANGE = (-160.0, -90.0)
+STRAND_PSI_RANGE = (90.0, 180.0)
+
+SS_WEIGHTS: Mapping[str, float] = {"H": 1.0, "E": 1.0, "C": 0.0}
+
+
+__all__ = [
+    "clash_energy",
+    "detect_ss_labels",
+    "ramachandran_penalty",
+    "rotamer_penalty",
+]
 
 
 def _wrap_angle(angle: float) -> float:
@@ -299,6 +317,125 @@ def rotamer_penalty(
     if best_excess == float("inf"):
         return 0.0
     return ALPHA_ROT * best_excess
+
+
+def _clamp(value: float, lower: float, upper: float) -> float:
+    if value < lower:
+        return lower
+    if value > upper:
+        return upper
+    return value
+
+
+def _distance(a: Sequence[float], b: Sequence[float]) -> float:
+    dx = a[0] - b[0]
+    dy = a[1] - b[1]
+    dz = a[2] - b[2]
+    return sqrt(dx * dx + dy * dy + dz * dz)
+
+
+def _angle(donor: Sequence[float], hydrogen: Sequence[float], acceptor: Sequence[float]) -> float:
+    """Return the D–H–A angle in degrees for three points."""
+
+    # Build vectors pointing from hydrogen towards the donor and acceptor atoms.
+    v_d = (donor[0] - hydrogen[0], donor[1] - hydrogen[1], donor[2] - hydrogen[2])
+    v_a = (acceptor[0] - hydrogen[0], acceptor[1] - hydrogen[1], acceptor[2] - hydrogen[2])
+
+    dot = v_d[0] * v_a[0] + v_d[1] * v_a[1] + v_d[2] * v_a[2]
+    norm_d = sqrt(v_d[0] * v_d[0] + v_d[1] * v_d[1] + v_d[2] * v_d[2])
+    norm_a = sqrt(v_a[0] * v_a[0] + v_a[1] * v_a[1] + v_a[2] * v_a[2])
+
+    if norm_d == 0.0 or norm_a == 0.0:
+        return 0.0
+
+    cosine = _clamp(dot / (norm_d * norm_a), -1.0, 1.0)
+    return degrees(acos(cosine))
+
+
+def _in_range(value: float, bounds: tuple[float, float]) -> bool:
+    lower, upper = bounds
+    if lower <= upper:
+        return lower <= value <= upper
+    return lower <= value or value <= upper
+
+
+def detect_ss_labels(coords: Iterable[Mapping[str, Any]]) -> str:
+    """Return DSSP-lite secondary structure labels for the provided residues."""
+
+    entries: list[dict[str, Any]] = []
+    for item in coords:
+        if "index" not in item:
+            raise ValueError("Secondary structure entries require an 'index' field")
+        index = int(item["index"])
+        entry = {
+            "index": index,
+            "phi": item.get("phi"),
+            "psi": item.get("psi"),
+            "n": item.get("n"),
+            "h": item.get("h"),
+            "o": item.get("o"),
+        }
+        entries.append(entry)
+
+    if not entries:
+        return ""
+
+    entries.sort(key=lambda e: e["index"])
+
+    donors: list[tuple[int, Sequence[float], Sequence[float]]] = []
+    acceptors: list[tuple[int, Sequence[float]]] = []
+
+    for entry in entries:
+        idx = entry["index"]
+        n = entry.get("n")
+        h = entry.get("h")
+        o = entry.get("o")
+
+        if n is not None and h is not None:
+            donors.append((idx, tuple(float(v) for v in n), tuple(float(v) for v in h)))
+        if o is not None:
+            acceptors.append((idx, tuple(float(v) for v in o)))
+
+    hbond_map: dict[int, set[int]] = {entry["index"]: set() for entry in entries}
+
+    for donor_idx, donor_pos, hydrogen_pos in donors:
+        for acceptor_idx, acceptor_pos in acceptors:
+            if donor_idx == acceptor_idx:
+                continue
+            distance = _distance(hydrogen_pos, acceptor_pos)
+            if distance > HBOND_MAX_DISTANCE:
+                continue
+            angle = _angle(donor_pos, hydrogen_pos, acceptor_pos)
+            if angle < HBOND_MIN_ANGLE:
+                continue
+            hbond_map.setdefault(donor_idx, set()).add(acceptor_idx)
+            hbond_map.setdefault(acceptor_idx, set()).add(donor_idx)
+
+    labels: list[str] = []
+    for entry in entries:
+        idx = entry["index"]
+        phi = entry.get("phi")
+        psi = entry.get("psi")
+        label = "C"
+
+        if phi is not None and psi is not None:
+            phi_f = float(phi)
+            psi_f = float(psi)
+            partners = hbond_map.get(idx, set())
+
+            if _in_range(phi_f, HELIX_PHI_RANGE) and _in_range(psi_f, HELIX_PSI_RANGE):
+                if any(
+                    HELIX_HBOND_RANGE[0] <= abs(partner - idx) <= HELIX_HBOND_RANGE[1]
+                    for partner in partners
+                ):
+                    label = "H"
+            elif _in_range(phi_f, STRAND_PHI_RANGE) and _in_range(psi_f, STRAND_PSI_RANGE):
+                if any(abs(partner - idx) >= 2 for partner in partners):
+                    label = "E"
+
+        labels.append(label)
+
+    return "".join(labels)
 
 
 def _get_atom_attribute(atom: Any, name: str) -> float:
