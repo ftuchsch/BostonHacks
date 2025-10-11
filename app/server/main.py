@@ -4,9 +4,21 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 if __package__:
-    from .scoring import SS_WEIGHTS, clash_energy, detect_ss_labels, rotamer_penalty
+    from .scoring import (
+        SS_WEIGHTS,
+        clash_energy,
+        compactness_penalty,
+        detect_ss_labels,
+        rotamer_penalty,
+    )
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
-    from scoring import SS_WEIGHTS, clash_energy, detect_ss_labels, rotamer_penalty
+    from scoring import (
+        SS_WEIGHTS,
+        clash_energy,
+        compactness_penalty,
+        detect_ss_labels,
+        rotamer_penalty,
+    )
 
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
@@ -59,6 +71,8 @@ async def score(request: ScoreRequest) -> JSONResponse:
     """Compute score terms for the provided atoms."""
 
     clash = clash_energy(request.atoms)
+    positions = [(atom.x, atom.y, atom.z) for atom in request.atoms]
+    compact = compactness_penalty(positions)
 
     rotamer_total = 0.0
     ss_entries: list[dict[str, object]] = []
@@ -113,7 +127,7 @@ async def score(request: ScoreRequest) -> JSONResponse:
 
     per_residue = [per_residue_map[key] for key in sorted(per_residue_map)]
 
-    total_score = 1000.0 - clash - rotamer_total - ss_total
+    total_score = 1000.0 - clash - rotamer_total - ss_total - compact
     payload = {
         "score": total_score,
         "terms": {
@@ -121,7 +135,7 @@ async def score(request: ScoreRequest) -> JSONResponse:
             "rama": 0.0,
             "rotamer": rotamer_total,
             "ss": ss_total,
-            "compact": 0.0,
+            "compact": compact,
             "hbond": 0.0,
         },
         "per_residue": per_residue,
