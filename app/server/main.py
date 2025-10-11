@@ -9,6 +9,7 @@ if __package__:
         clash_energy,
         compactness_penalty,
         detect_ss_labels,
+        hbond_bonus,
         rotamer_penalty,
     )
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
@@ -17,6 +18,7 @@ else:  # pragma: no cover - allows running ``uvicorn main:app`` from this direct
         clash_energy,
         compactness_penalty,
         detect_ss_labels,
+        hbond_bonus,
         rotamer_penalty,
     )
 
@@ -93,6 +95,8 @@ async def score(request: ScoreRequest) -> JSONResponse:
             per_residue_map[res_idx] = entry
         return entry
 
+    hbond_total = 0.0
+
     if request.residues:
         chi_map = {res.index: tuple(res.chi_angles) for res in request.residues}
         residue_types = {res.index: res.type for res in request.residues}
@@ -114,6 +118,12 @@ async def score(request: ScoreRequest) -> JSONResponse:
                 ss_entry["o"] = residue.o.as_tuple()
             ss_entries.append(ss_entry)
 
+        if ss_entries:
+            hbond_total, hbond_contribs = hbond_bonus(ss_entries)
+            for res_idx, value in hbond_contribs.items():
+                entry = _ensure_entry(res_idx)
+                entry["hbond"] = value
+
     ss_total = 0.0
     if request.target_ss:
         labels = detect_ss_labels(ss_entries) if ss_entries else ""
@@ -127,7 +137,7 @@ async def score(request: ScoreRequest) -> JSONResponse:
 
     per_residue = [per_residue_map[key] for key in sorted(per_residue_map)]
 
-    total_score = 1000.0 - clash - rotamer_total - ss_total - compact
+    total_score = 1000.0 - clash - rotamer_total - ss_total - compact + hbond_total
     payload = {
         "score": total_score,
         "terms": {
@@ -136,7 +146,7 @@ async def score(request: ScoreRequest) -> JSONResponse:
             "rotamer": rotamer_total,
             "ss": ss_total,
             "compact": compact,
-            "hbond": 0.0,
+            "hbond": hbond_total,
         },
         "per_residue": per_residue,
     }
