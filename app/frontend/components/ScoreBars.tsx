@@ -7,6 +7,7 @@ export type ScoreBarsProps = {
   totalScore: number;
   terms: ScoreTerms | null;
   isScoring: boolean;
+  highlightedTerms?: (keyof ScoreTerms)[];
 };
 
 const formatTermLabel = (term: keyof ScoreTerms) => {
@@ -28,7 +29,26 @@ const formatTermLabel = (term: keyof ScoreTerms) => {
   }
 };
 
-const ScoreBarsComponent = ({ totalScore, terms, isScoring }: ScoreBarsProps) => {
+const ScoreBarsComponent = ({ totalScore, terms, isScoring, highlightedTerms = [] }: ScoreBarsProps) => {
+  const totalFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(undefined, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+      }),
+    []
+  );
+
+  const termFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(undefined, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+        signDisplay: "always",
+      }),
+    []
+  );
+
   const barData = useMemo(() => {
     if (!terms) {
       return [];
@@ -46,22 +66,28 @@ const ScoreBarsComponent = ({ totalScore, terms, isScoring }: ScoreBarsProps) =>
       return magnitude > acc ? magnitude : acc;
     }, 0);
 
+    const highlightSet = new Set(highlightedTerms);
+
     return entries.map((entry) => ({
       ...entry,
       percent: maxMagnitude === 0 ? 0 : Math.abs(entry.value) / maxMagnitude,
+      highlighted: highlightSet.has(entry.key),
     }));
-  }, [terms]);
+  }, [terms, highlightedTerms]);
 
   return (
     <section className="score-bars" aria-label="Score summary">
       <header className="score-bars__header">
         <h2>Total Score</h2>
-        <span className="score-bars__value">{totalScore.toFixed(2)}</span>
+        <span className="score-bars__value">{totalFormatter.format(totalScore)}</span>
         {isScoring ? <span className="score-bars__status">Scoring…</span> : null}
       </header>
       <div className="score-bars__list">
-        {barData.map(({ key, value, percent }) => (
-          <div key={key} className="score-bars__row">
+        {barData.map(({ key, value, percent, highlighted }) => (
+          <div
+            key={key}
+            className={`score-bars__row${highlighted ? " score-bars__row--highlight" : ""}`}
+          >
             <span className="score-bars__label">{formatTermLabel(key)}</span>
             <div className="score-bars__bar">
               <div
@@ -72,7 +98,7 @@ const ScoreBarsComponent = ({ totalScore, terms, isScoring }: ScoreBarsProps) =>
                 }}
               />
             </div>
-            <span className="score-bars__value">{value.toFixed(2)}</span>
+            <span className="score-bars__value">{termFormatter.format(value)}</span>
           </div>
         ))}
         {barData.length === 0 ? (
@@ -122,6 +148,28 @@ const ScoreBarsComponent = ({ totalScore, terms, isScoring }: ScoreBarsProps) =>
           grid-template-columns: 1.75fr 3fr auto;
           align-items: center;
           gap: 0.75rem;
+          border-radius: 0.5rem;
+          padding: 0.15rem 0.35rem;
+        }
+
+        .score-bars__row--highlight {
+          animation: score-bars-highlight 650ms ease-out;
+          background: rgba(34, 197, 94, 0.16);
+        }
+
+        @keyframes score-bars-highlight {
+          0% {
+            background: rgba(34, 197, 94, 0.32);
+          }
+          100% {
+            background: rgba(34, 197, 94, 0.0);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .score-bars__row--highlight {
+            animation: none;
+          }
         }
 
         .score-bars__label {

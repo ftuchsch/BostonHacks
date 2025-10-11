@@ -21,11 +21,29 @@ export type ScoreResponse = {
   per_residue: PerResidueTerm[];
 };
 
+export type NudgeMove =
+  | {
+      type: "torsion";
+      delta: { phi?: number; psi?: number };
+    }
+  | {
+      type: "rotamer";
+      rotamer_id: number;
+    };
+
+export type NudgeResponse = {
+  res_idx: number;
+  move: NudgeMove;
+  expected_delta_score: number;
+  term_deltas: ScoreTerms;
+  model_used: boolean;
+};
+
 export type TorsionMove = {
   type: "torsion";
   delta: {
-    phi: number;
-    psi: number;
+    phi?: number;
+    psi?: number;
   };
 };
 
@@ -46,6 +64,7 @@ export type ScoreRequestBody = {
 };
 
 const SCORE_ENDPOINT = "/api/score";
+const NUDGE_ENDPOINT = "/api/nudge";
 
 export async function score(body: ScoreRequestBody): Promise<ScoreResponse> {
   const response = await fetch(SCORE_ENDPOINT, {
@@ -61,6 +80,23 @@ export async function score(body: ScoreRequestBody): Promise<ScoreResponse> {
   }
 
   const payload = (await response.json()) as ScoreResponse;
+  return payload;
+}
+
+export async function nudge(): Promise<NudgeResponse> {
+  const response = await fetch(NUDGE_ENDPOINT, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    throw new Error(`Nudge request failed with status ${response.status}`);
+  }
+
+  const payload = (await response.json()) as NudgeResponse;
   return payload;
 }
 

@@ -3,12 +3,15 @@
 import { memo, useMemo } from "react";
 import type { PerResidueTerm } from "../lib/api";
 
+type ResidueTermKey = "clash" | "rama" | "rotamer" | "ss";
+
 export type ResiduePanelProps = {
   residue: PerResidueTerm | null;
   isScoring: boolean;
   angles: { phi: number; psi: number } | null;
   rotamerId: number | null;
   errorMessage: string | null;
+  highlight: { resIdx: number; terms: ResidueTermKey[] } | null;
 };
 
 const ResiduePanelComponent = ({
@@ -17,7 +20,18 @@ const ResiduePanelComponent = ({
   angles,
   rotamerId,
   errorMessage,
+  highlight,
 }: ResiduePanelProps) => {
+  const penaltyFormatter = useMemo(
+    () =>
+      new Intl.NumberFormat(undefined, {
+        minimumFractionDigits: 1,
+        maximumFractionDigits: 1,
+        signDisplay: "always",
+      }),
+    []
+  );
+
   const penalties = useMemo(() => {
     if (!residue) {
       return [];
@@ -25,15 +39,20 @@ const ResiduePanelComponent = ({
 
     return (
       [
-        { key: "clash", label: "Clash", value: residue.clash },
-        { key: "rama", label: "Ramachandran", value: residue.rama },
-        { key: "rotamer", label: "Rotamer", value: residue.rotamer },
-        { key: "ss", label: "Secondary Structure", value: residue.ss },
+        { key: "clash" as const, label: "Clash", value: residue.clash },
+        { key: "rama" as const, label: "Ramachandran", value: residue.rama },
+        { key: "rotamer" as const, label: "Rotamer", value: residue.rotamer },
+        { key: "ss" as const, label: "Secondary Structure", value: residue.ss },
       ]
         .filter((entry) => typeof entry.value === "number")
         .sort((a, b) => b.value - a.value)
     );
   }, [residue]);
+
+  const highlightedTerms =
+    residue && highlight && highlight.resIdx === residue.idx
+      ? new Set<ResidueTermKey>(highlight.terms)
+      : null;
 
   return (
     <aside className="residue-panel">
@@ -64,12 +83,24 @@ const ResiduePanelComponent = ({
             ) : null}
           </div>
           <dl className="residue-panel__penalties">
-            {penalties.map((entry) => (
-              <div key={entry.key} className="residue-panel__penalty">
-                <dt>{entry.label}</dt>
-                <dd>{entry.value.toFixed(2)}</dd>
-              </div>
-            ))}
+            {penalties.map((entry) => {
+              const isHighlighted = highlightedTerms?.has(entry.key) ?? false;
+              const rowClass = isHighlighted
+                ? "residue-panel__penalty residue-panel__penalty--highlight"
+                : "residue-panel__penalty";
+              const labelClass = isHighlighted
+                ? "residue-panel__penalty-label residue-panel__penalty-label--highlight"
+                : "residue-panel__penalty-label";
+              const valueClass = isHighlighted
+                ? "residue-panel__penalty-value residue-panel__penalty-value--highlight"
+                : "residue-panel__penalty-value";
+              return (
+                <div key={entry.key} className={rowClass}>
+                  <dt className={labelClass}>{entry.label}</dt>
+                  <dd className={valueClass}>{penaltyFormatter.format(entry.value)}</dd>
+                </div>
+              );
+            })}
           </dl>
         </div>
       ) : (
@@ -135,15 +166,46 @@ const ResiduePanelComponent = ({
           display: flex;
           justify-content: space-between;
           font-size: 0.95rem;
+          border-radius: 0.5rem;
+          padding: 0.25rem 0.5rem;
         }
 
-        .residue-panel__penalty dt {
+        .residue-panel__penalty--highlight {
+          animation: residue-penalty-highlight 650ms ease-out;
+          background: rgba(34, 197, 94, 0.16);
+        }
+
+        .residue-panel__penalty-label,
+        .residue-panel__penalty-value {
           margin: 0;
         }
 
-        .residue-panel__penalty dd {
-          margin: 0;
+        .residue-panel__penalty-value {
           font-variant-numeric: tabular-nums;
+        }
+
+        .residue-panel__penalty-label--highlight,
+        .residue-panel__penalty-value--highlight {
+          color: #bbf7d0;
+        }
+
+        .residue-panel__penalty-value--highlight {
+          font-weight: 600;
+        }
+
+        @keyframes residue-penalty-highlight {
+          0% {
+            background: rgba(34, 197, 94, 0.32);
+          }
+          100% {
+            background: rgba(34, 197, 94, 0);
+          }
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .residue-panel__penalty--highlight {
+            animation: none;
+          }
         }
 
         .residue-panel__empty {

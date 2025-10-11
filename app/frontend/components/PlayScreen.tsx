@@ -10,6 +10,7 @@ import {
 } from "react";
 import {
   calculateHeatmap,
+  nudge,
   score,
   type PerResidueTerm,
   type ScoreDiff,
@@ -19,6 +20,8 @@ import {
 import { ResidueHeatmapOverlay } from "./ResidueHeatmapOverlay";
 import { ResiduePanel } from "./ResiduePanel";
 import { ScoreBars } from "./ScoreBars";
+import { AINudgeButton } from "./AINudgeButton";
+import type { NudgeSuggestion } from "./AINudgeTooltip";
 
 type WorkerMessage =
   | {
@@ -37,6 +40,8 @@ type Angles = {
   phi: number;
   psi: number;
 };
+
+type ResidueTermKey = "clash" | "rama" | "rotamer" | "ss";
 
 const INITIAL_ANGLES: Angles = { phi: 0, psi: 0 };
 
@@ -83,6 +88,22 @@ export const PlayScreen = () => {
   const [perResidue, setPerResidue] = useState<PerResidueTerm[]>([]);
   const [heatmapValues, setHeatmapValues] = useState<number[]>([]);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [highlightedTerms, setHighlightedTerms] = useState<(keyof ScoreTerms)[]>([]);
+  const [highlightedResidue, setHighlightedResidue] = useState<{
+    resIdx: number;
+    terms: ResidueTermKey[];
+  } | null>(null);
+  const [nudgeState, setNudgeState] = useState<{
+    loading: boolean;
+    suggestion: NudgeSuggestion | null;
+    applying: boolean;
+    error: string | null;
+  }>({
+    loading: false,
+    suggestion: null,
+    applying: false,
+    error: null,
+  });
 
   const requestIdRef = useRef(0);
   const latestAppliedRequestRef = useRef(0);
@@ -92,6 +113,12 @@ export const PlayScreen = () => {
   const interactingRef = useRef(false);
   const interactingTimerRef = useRef<number | null>(null);
   const workerRef = useRef<Worker | null>(null);
+  const previousTermsRef = useRef<ScoreTerms | null>(null);
+  const previousResiduesRef = useRef<PerResidueTerm[]>([]);
+  const highlightTimeoutRef = useRef<number | null>(null);
+  const residueHighlightTimeoutRef = useRef<number | null>(null);
+  const pendingHighlightResidueRef = useRef<number | null>(null);
+  const nudgeButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const handleInteractionPulse = useCallback(() => {
     interactingRef.current = true;
@@ -111,24 +138,96 @@ export const PlayScreen = () => {
       if (interactingTimerRef.current) {
         window.clearTimeout(interactingTimerRef.current);
       }
+      if (highlightTimeoutRef.current) {
+        window.clearTimeout(highlightTimeoutRef.current);
+      }
+      if (residueHighlightTimeoutRef.current) {
+        window.clearTimeout(residueHighlightTimeoutRef.current);
+      }
     };
   }, []);
 
   const applyScorePayload = useCallback(
-    (requestId: number, response: ScoreResponse) => {
+    (
+      requestId: number,
+      response: ScoreResponse,
+      meta?: { highlightResidue?: number; heatmap?: number[] }
+    ) => {
       if (requestId !== latestAppliedRequestRef.current) {
         return;
       }
+      const previousTerms = previousTermsRef.current;
+      const nextTerms = response.terms;
+      const improvedTerms: (keyof ScoreTerms)[] = [];
+      if (previousTerms) {
+        (Object.keys(nextTerms) as (keyof ScoreTerms)[]).forEach((key) => {
+          if (nextTerms[key] < previousTerms[key] - 1e-6) {
+            improvedTerms.push(key);
+          }
+        });
+      }
+
+      if (improvedTerms.length > 0) {
+        setHighlightedTerms(improvedTerms);
+        if (highlightTimeoutRef.current) {
+          window.clearTimeout(highlightTimeoutRef.current);
+        }
+        highlightTimeoutRef.current = window.setTimeout(() => {
+          setHighlightedTerms([]);
+          highlightTimeoutRef.current = null;
+        }, 700);
+      } else {
+        setHighlightedTerms([]);
+      }
+
+      const candidateResidue =
+        meta?.highlightResidue ?? pendingHighlightResidueRef.current;
+      if (candidateResidue !== null) {
+        const previousResidueEntry = previousResiduesRef.current.find(
+          (entry) => entry.idx === candidateResidue
+        );
+        const nextResidueEntry = response.per_residue.find(
+          (entry) => entry.idx === candidateResidue
+        );
+        if (previousResidueEntry && nextResidueEntry) {
+          const residueImproved: ResidueTermKey[] = [];
+          (['clash', 'rama', 'rotamer', 'ss'] as const).forEach((key) => {
+            if (nextResidueEntry[key] < previousResidueEntry[key] - 1e-6) {
+              residueImproved.push(key);
+            }
+          });
+          if (residueImproved.length > 0) {
+            setHighlightedResidue({ resIdx: candidateResidue, terms: residueImproved });
+            if (residueHighlightTimeoutRef.current) {
+              window.clearTimeout(residueHighlightTimeoutRef.current);
+            }
+            residueHighlightTimeoutRef.current = window.setTimeout(() => {
+              setHighlightedResidue(null);
+              residueHighlightTimeoutRef.current = null;
+            }, 700);
+          } else {
+            setHighlightedResidue(null);
+          }
+        } else {
+          setHighlightedResidue(null);
+        }
+      } else {
+        setHighlightedResidue(null);
+      }
+
+      pendingHighlightResidueRef.current = null;
       setTotalScore(response.score);
       setTermTotals(response.terms);
       setPerResidue(response.per_residue);
-      setHeatmapValues(fallbackHeatmap(response));
+      setHeatmapValues(meta?.heatmap ?? fallbackHeatmap(response));
       if (selectedResidue === null && response.per_residue.length > 0) {
         setSelectedResidue(response.per_residue[0].idx);
       }
       setIsScoring(false);
       setToastMessage(null);
       hasRetriedRef.current = false;
+      previousTermsRef.current = response.terms;
+      previousResiduesRef.current = response.per_residue;
     },
     [selectedResidue]
   );
@@ -169,6 +268,7 @@ export const PlayScreen = () => {
       latestAppliedRequestRef.current = nextRequestId;
       setIsScoring(true);
       lastDiffRef.current = diff;
+      pendingHighlightResidueRef.current = diff.res_idx;
 
       const worker = workerRef.current;
       if (worker) {
@@ -190,16 +290,9 @@ export const PlayScreen = () => {
       }
 
       if (message.status === "success") {
-        setIsScoring(false);
-        setToastMessage(null);
-        setTotalScore(message.response.score);
-        setTermTotals(message.response.terms);
-        setPerResidue(message.response.per_residue);
-        setHeatmapValues(message.heatmap);
-        if (selectedResidue === null && message.response.per_residue.length > 0) {
-          setSelectedResidue(message.response.per_residue[0].idx);
-        }
-        hasRetriedRef.current = false;
+        applyScorePayload(message.requestId, message.response, {
+          heatmap: message.heatmap,
+        });
       } else {
         setIsScoring(false);
         setToastMessage("Score update failed; retrying…");
@@ -216,7 +309,7 @@ export const PlayScreen = () => {
         }
       }
     },
-    [queueScoreRequest, selectedResidue]
+    [applyScorePayload, queueScoreRequest]
   );
 
   useEffect(() => {
@@ -324,6 +417,97 @@ export const PlayScreen = () => {
     [debouncedScore, handleInteractionPulse, perResidue, selectedResidue]
   );
 
+  const handleNudgeRequest = useCallback(async () => {
+    setNudgeState((prev) => ({ ...prev, loading: true, error: null }));
+    try {
+      const response = await nudge();
+      const suggestion: NudgeSuggestion = {
+        resIdx: response.res_idx,
+        move: response.move,
+        expectedDelta: response.expected_delta_score,
+        termDeltas: response.term_deltas,
+        modelUsed: response.model_used,
+      };
+      setNudgeState({
+        loading: false,
+        suggestion,
+        applying: false,
+        error: null,
+      });
+    } catch (error) {
+      console.error("Nudge request failed", error);
+      setToastMessage("Couldn't fetch nudge. Try again.");
+      setNudgeState((prev) => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : "Unknown error",
+      }));
+    }
+  }, []);
+
+  const handleNudgeCancel = useCallback(() => {
+    setNudgeState((prev) => ({
+      ...prev,
+      suggestion: null,
+      applying: false,
+    }));
+  }, []);
+
+  const handleNudgeConfirm = useCallback(async () => {
+    if (!nudgeState.suggestion) {
+      return;
+    }
+    const suggestion = nudgeState.suggestion;
+    setNudgeState((prev) => ({ ...prev, applying: true, error: null }));
+
+    const move = suggestion.move;
+    let diff: ScoreDiff;
+    if (move.type === "torsion") {
+      const delta = move.delta ?? {};
+      diff = {
+        res_idx: suggestion.resIdx,
+        move: {
+          type: "torsion",
+          delta: {
+            ...(typeof delta.phi === "number" ? { phi: delta.phi } : {}),
+            ...(typeof delta.psi === "number" ? { psi: delta.psi } : {}),
+          },
+        },
+      };
+    } else {
+      diff = {
+        res_idx: suggestion.resIdx,
+        move: {
+          type: "rotamer",
+          rotamer_id: move.rotamer_id,
+        },
+      };
+    }
+
+    const nextRequestId = requestIdRef.current + 1;
+    requestIdRef.current = nextRequestId;
+    latestAppliedRequestRef.current = nextRequestId;
+    setIsScoring(true);
+    lastDiffRef.current = diff;
+    pendingHighlightResidueRef.current = diff.res_idx;
+    try {
+      const response = await score({ diff });
+      applyScorePayload(nextRequestId, response, { highlightResidue: diff.res_idx });
+    } catch (error) {
+      console.error("Apply nudge failed", error);
+      setToastMessage("Apply failed.");
+      setIsScoring(false);
+      pendingHighlightResidueRef.current = null;
+    } finally {
+      setNudgeState({
+        loading: false,
+        suggestion: null,
+        applying: false,
+        error: null,
+      });
+    }
+  }, [applyScorePayload, nudgeState.suggestion]);
+
   const selectedResidueTerms = useMemo(() => {
     if (selectedResidue === null) {
       return null;
@@ -338,8 +522,20 @@ export const PlayScreen = () => {
       <div className="play-screen__grid">
         <section className="play-screen__viewer" aria-label="3D Viewer">
           <header className="play-screen__viewer-header">
-            <h1>Folding Workspace</h1>
-            {isScoring ? <span className="play-screen__badge">Scoring…</span> : null}
+            <div className="play-screen__viewer-title">
+              <h1>Folding Workspace</h1>
+              {isScoring ? <span className="play-screen__badge">Scoring…</span> : null}
+            </div>
+            <AINudgeButton
+              anchorRef={nudgeButtonRef}
+              disabled={isScoring || Boolean(nudgeState.suggestion)}
+              loading={nudgeState.loading}
+              applying={nudgeState.applying}
+              suggestion={nudgeState.suggestion}
+              onRequest={handleNudgeRequest}
+              onConfirm={handleNudgeConfirm}
+              onCancel={handleNudgeCancel}
+            />
           </header>
           <div className="play-screen__controls">
             <label className="play-screen__control">
@@ -390,13 +586,19 @@ export const PlayScreen = () => {
           </div>
         </section>
         <div className="play-screen__sidebar">
-          <ScoreBars totalScore={totalScore} terms={termTotals} isScoring={isScoring} />
+          <ScoreBars
+            totalScore={totalScore}
+            terms={termTotals}
+            isScoring={isScoring}
+            highlightedTerms={highlightedTerms}
+          />
           <ResiduePanel
             residue={selectedResidueTerms}
             isScoring={isScoring}
             angles={selectedResidue !== null ? angles : null}
             rotamerId={rotamerId}
             errorMessage={toastMessage}
+            highlight={highlightedResidue}
           />
         </div>
       </div>
@@ -430,6 +632,13 @@ export const PlayScreen = () => {
         }
 
         .play-screen__viewer-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 0.75rem;
+        }
+
+        .play-screen__viewer-title {
           display: flex;
           align-items: center;
           gap: 0.75rem;
