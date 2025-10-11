@@ -4,9 +4,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 if __package__:
-    from .scoring import clash_energy
+    from .scoring import clash_energy, rotamer_penalty
 else:  # pragma: no cover - allows running ``uvicorn main:app`` from this directory
-    from scoring import clash_energy
+    from scoring import clash_energy, rotamer_penalty
 
 app = FastAPI(title="FoldIt API", openapi_url="/api/openapi.json")
 
@@ -22,10 +22,19 @@ class Atom(BaseModel):
     z: float
 
 
+class ResidueState(BaseModel):
+    """Minimal residue representation for rotamer scoring."""
+
+    index: int
+    type: str
+    chi_angles: list[float] = []
+
+
 class ScoreRequest(BaseModel):
     """Request payload for scoring computations."""
 
     atoms: list[Atom]
+    residues: list[ResidueState] | None = None
 
 
 @app.post(f"{BASE_PREFIX}/score")
@@ -33,18 +42,39 @@ async def score(request: ScoreRequest) -> JSONResponse:
     """Compute score terms for the provided atoms."""
 
     clash = clash_energy(request.atoms)
-    total_score = 1000.0 - clash
+
+    rotamer_total = 0.0
+    per_residue: list[dict[str, float | int]] = []
+    if request.residues:
+        chi_map = {res.index: tuple(res.chi_angles) for res in request.residues}
+        residue_types = {res.index: res.type for res in request.residues}
+        for residue in request.residues:
+            penalty = rotamer_penalty(residue.index, chi_map, residue_types)
+            rotamer_total += penalty
+            per_residue.append(
+                {
+                    "i": residue.index,
+                    "clash": 0.0,
+                    "rama": 0.0,
+                    "rotamer": penalty,
+                    "ss": 0.0,
+                    "compact": 0.0,
+                    "hbond": 0.0,
+                }
+            )
+
+    total_score = 1000.0 - clash - rotamer_total
     payload = {
         "score": total_score,
         "terms": {
             "clash": clash,
             "rama": 0.0,
-            "rotamer": 0.0,
+            "rotamer": rotamer_total,
             "ss": 0.0,
             "compact": 0.0,
             "hbond": 0.0,
         },
-        "per_residue": [],
+        "per_residue": per_residue,
     }
     return JSONResponse(payload)
 
