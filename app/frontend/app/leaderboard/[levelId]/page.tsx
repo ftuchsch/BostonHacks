@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 
-import { ApiError, getLeaderboard, type LeaderboardResponse } from "../../lib/api";
+import {
+  ApiError,
+  getLeaderboard,
+  type LeaderboardItem,
+  type LeaderboardResponse,
+} from "../../../lib/api";
 
 type LeaderboardPageProps = {
   params: { levelId: string };
@@ -49,8 +54,10 @@ export default function LeaderboardPage({ params }: LeaderboardPageProps) {
         }
         if (err instanceof ApiError && err.status === 404) {
           setError("Level not found");
+        } else if (err instanceof Error) {
+          setError(err.message);
         } else {
-          setError(err instanceof Error ? err.message : "Failed to load leaderboard");
+          setError("Failed to load leaderboard");
         }
       } finally {
         if (!cancelled) {
@@ -64,7 +71,7 @@ export default function LeaderboardPage({ params }: LeaderboardPageProps) {
     };
   }, [params.levelId]);
 
-  const items = useMemo(() => response?.items ?? [], [response]);
+  const items = useMemo<LeaderboardItem[]>(() => response?.items ?? [], [response]);
 
   return (
     <main className="leaderboard">
@@ -240,4 +247,3 @@ export default function LeaderboardPage({ params }: LeaderboardPageProps) {
     </main>
   );
 }
-

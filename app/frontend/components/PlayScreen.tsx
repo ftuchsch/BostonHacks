@@ -88,6 +88,9 @@ type PlayScreenProps = {
   sequence?: string;
   initialCoords?: ResidueCoordinate[];
   playerName?: string;
+  coordsStatus?: "loading" | "ready" | "error";
+  coordsError?: string | null;
+  onRetryCoords?: () => void;
 };
 
 export const PlayScreen = ({
@@ -95,6 +98,9 @@ export const PlayScreen = ({
   sequence,
   initialCoords,
   playerName,
+  coordsStatus,
+  coordsError,
+  onRetryCoords,
 }: PlayScreenProps) => {
   const router = useRouter();
   const [selectedResidue, setSelectedResidue] = useState<number | null>(null);
@@ -147,10 +153,108 @@ export const PlayScreen = ({
     () => initialCoords ?? null,
     [initialCoords]
   );
-    const submitCoords = useMemo(
-    () => structureResidues?.map((residue) => residue.coords) ?? [],
-    [structureResidues]
-  );
+  const submitCoords = useMemo(() => {
+    if (!structureResidues) {
+      const fallbackCount = sequence?.length ?? 0;
+      if (fallbackCount === 0) {
+        return [];
+      }
+      return Array.from({ length: fallbackCount }, (_, idx) => idx).flatMap((idx) => [
+        [idx * 3 - 1.46, 0, 0],
+        [idx * 3, 0, 0],
+        [idx * 3 + 1.53, 0, 0],
+      ]);
+    }
+
+    const CA_LENGTH = 1.46;
+    const C_LENGTH = 1.53;
+
+    const toTuple = (coords: number[] | [number, number, number]): [number, number, number] => [
+      Number(coords[0]),
+      Number(coords[1]),
+      Number(coords[2]),
+    ];
+
+    const magnitude = (vector: [number, number, number]): number =>
+      Math.sqrt(vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]);
+
+    const normalize = (vector: [number, number, number]): [number, number, number] => {
+      const length = magnitude(vector);
+      if (length < 1e-8) {
+        return [1, 0, 0];
+      }
+      return [vector[0] / length, vector[1] / length, vector[2] / length];
+    };
+
+    const diff = (
+      a: [number, number, number],
+      b: [number, number, number]
+    ): [number, number, number] => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+
+    const add = (
+      a: [number, number, number],
+      b: [number, number, number]
+    ): [number, number, number] => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+
+    const scale = (
+      vector: [number, number, number],
+      length: number
+    ): [number, number, number] => [
+      vector[0] * length,
+      vector[1] * length,
+      vector[2] * length,
+    ];
+
+    const caPositions = structureResidues.map((residue) => {
+      const caAtom = residue.atoms?.find((atom) => atom.name.toUpperCase() === "CA");
+      return toTuple(caAtom?.coords ?? residue.coords);
+    });
+
+    const backbone: [number, number, number][] = [];
+
+    structureResidues.forEach((residue, index) => {
+      const atoms = residue.atoms ?? [];
+      const findAtom = (name: string) =>
+        atoms.find((atom) => atom.name.toUpperCase() === name)?.coords;
+
+      let n = findAtom("N");
+      let ca = findAtom("CA") ?? residue.coords;
+      let c = findAtom("C");
+
+      const caTuple = toTuple(ca);
+      const prevCA = caPositions[index - 1] ?? add(caTuple, [-CA_LENGTH, 0, 0]);
+      const nextCA = caPositions[index + 1] ?? add(caTuple, [CA_LENGTH, 0, 0]);
+
+      if (!n) {
+        const backward = normalize(diff(prevCA, caTuple));
+        n = add(caTuple, scale(backward, CA_LENGTH));
+      }
+
+      if (!c) {
+        const forward = normalize(diff(nextCA, caTuple));
+        c = add(caTuple, scale(forward, C_LENGTH));
+      }
+
+      backbone.push(toTuple(n), caTuple, toTuple(c));
+    });
+
+    return backbone;
+  }, [structureResidues, sequence?.length]);
+  const coordsNotice = useMemo(() => {
+    if (!coordsStatus) {
+      return null;
+    }
+    if (coordsStatus === "loading") {
+      return { tone: "info" as const, message: "Fetching detailed starting coordinates…" };
+    }
+    if (coordsStatus === "error") {
+      return {
+        tone: "error" as const,
+        message: coordsError ?? "Starting coordinates are unavailable. Showing a placeholder backbone.",
+      };
+    }
+    return null;
+  }, [coordsError, coordsStatus]);
   const structureLoaded = Boolean(
     levelId && sequence && structureResidues && structureResidues.length > 0
   );
@@ -620,6 +724,22 @@ export const PlayScreen = ({
               />
             </div>
           </header>
+          {coordsNotice ? (
+            <div
+              className={
+                coordsNotice.tone === "error"
+                  ? "play-screen__coords-alert play-screen__coords-alert--error"
+                  : "play-screen__coords-alert"
+              }
+            >
+              <span>{coordsNotice.message}</span>
+              {coordsNotice.tone === "error" && onRetryCoords ? (
+                <button type="button" onClick={onRetryCoords}>
+                  Retry download
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           <div className="play-screen__scene">
             <ProteinViewer
               residues={structureResidues ?? []}
@@ -768,6 +888,43 @@ export const PlayScreen = ({
           display: flex;
           align-items: center;
           gap: 0.75rem;
+        }
+
+        .play-screen__coords-alert {
+          display: flex;
+          align-items: center;
+          gap: 0.75rem;
+          padding: 0.6rem 0.9rem;
+          border-radius: 0.75rem;
+          background: rgba(59, 130, 246, 0.12);
+          color: #bfdbfe;
+          font-size: 0.95rem;
+        }
+
+        .play-screen__coords-alert button {
+          margin-left: auto;
+          padding: 0.25rem 0.75rem;
+          border-radius: 9999px;
+          background: rgba(14, 165, 233, 0.2);
+          color: #bae6fd;
+          border: 1px solid rgba(125, 211, 252, 0.4);
+          cursor: pointer;
+        }
+
+        .play-screen__coords-alert button:hover {
+          background: rgba(14, 165, 233, 0.32);
+        }
+
+        .play-screen__coords-alert--error {
+          background: rgba(248, 113, 113, 0.14);
+          color: #fecaca;
+          border: 1px solid rgba(248, 113, 113, 0.3);
+        }
+
+        .play-screen__coords-alert--error button {
+          background: rgba(248, 113, 113, 0.18);
+          color: #fecaca;
+          border-color: rgba(252, 165, 165, 0.4);
         }
 
         .play-screen__scene {

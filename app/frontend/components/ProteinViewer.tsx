@@ -23,8 +23,24 @@ type Rotation = {
   pitch: number;
 };
 
-type ProjectedPoint = {
-  index: number;
+type AtomInfo = {
+  id: number;
+  residueIndex: number;
+  name: string;
+  element: string;
+  coords: [number, number, number];
+};
+
+type BondType = "backbone" | "sidechain" | "carbonyl";
+
+type BondInfo = {
+  startId: number;
+  endId: number;
+  type: BondType;
+};
+
+type ProjectedCA = {
+  residueIndex: number;
   x: number;
   y: number;
   z: number;
@@ -33,8 +49,72 @@ type ProjectedPoint = {
 const clamp = (value: number, min: number, max: number) =>
   Math.max(min, Math.min(max, value));
 
-const ZOOM_RANGE: [number, number] = [0.6, 2.5];
+const ZOOM_RANGE: [number, number] = [0.6, 2.8];
 const INITIAL_ROTATION: Rotation = { yaw: Math.PI / 6, pitch: -Math.PI / 8 };
+
+const ATOM_RADII: Record<string, number> = {
+  C: 0.6,
+  N: 0.58,
+  O: 0.55,
+  S: 0.75,
+  H: 0.4,
+};
+
+const ATOM_COLORS: Record<string, [number, number, number]> = {
+  C: [203, 213, 225],
+  N: [56, 189, 248],
+  O: [248, 113, 113],
+  S: [250, 204, 21],
+  H: [241, 245, 249],
+};
+
+const BOND_COLORS: Record<BondType, [number, number, number]> = {
+  backbone: [148, 163, 184],
+  sidechain: [165, 180, 203],
+  carbonyl: [244, 114, 182],
+};
+
+const BOND_WIDTH: Record<BondType, number> = {
+  backbone: 7,
+  sidechain: 5.5,
+  carbonyl: 4,
+};
+
+const clampChannel = (value: number): number => Math.max(0, Math.min(255, value));
+
+const scaleColour = (
+  colour: [number, number, number],
+  factor: number
+): [number, number, number] => [
+  clampChannel(colour[0] * factor),
+  clampChannel(colour[1] * factor),
+  clampChannel(colour[2] * factor),
+];
+
+const offsetColour = (
+  colour: [number, number, number],
+  offset: number
+): [number, number, number] => [
+  clampChannel(colour[0] + offset),
+  clampChannel(colour[1] + offset),
+  clampChannel(colour[2] + offset),
+];
+
+const getResidueAtoms = (residue: ResidueCoordinate) => {
+  if (Array.isArray(residue.atoms) && residue.atoms.length > 0) {
+    return residue.atoms;
+  }
+  return [
+    {
+      name: "CA",
+      element: "C",
+      coords: residue.coords,
+    },
+  ];
+};
+
+const colourString = ([r, g, b]: [number, number, number], alpha = 1) =>
+  `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${alpha})`;
 
 export function ProteinViewer({
   residues,
@@ -46,32 +126,97 @@ export function ProteinViewer({
   const draggingRef = useRef(false);
   const dragStartRef = useRef<{ x: number; y: number } | null>(null);
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
-  const projectedRef = useRef<ProjectedPoint[]>([]);
+  const projectedCARef = useRef<ProjectedCA[]>([]);
   const frameRef = useRef<number | null>(null);
 
   const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [rotation, setRotation] = useState<Rotation>(INITIAL_ROTATION);
   const [zoom, setZoom] = useState(1);
 
-  const residuePoints = useMemo(() => residues ?? [], [residues]);
+  const residueData = useMemo(() => residues ?? [], [residues]);
 
-  useEffect(() => {
-    if (!containerRef.current) {
-      return () => undefined;
-    }
-    const observer = new ResizeObserver((entries) => {
-      const entry = entries[0];
-      if (entry) {
-        const { width, height } = entry.contentRect;
-        setDimensions((prev) => {
-          if (Math.abs(prev.width - width) < 0.5 && Math.abs(prev.height - height) < 0.5) {
-            return prev;
-          }
-          return { width, height };
-        });
+  const structure = useMemo(() => {
+    const atoms: AtomInfo[] = [];
+    const bonds: BondInfo[] = [];
+    const residueAtomMap = new Map<number, Map<string, AtomInfo>>();
+
+    let nextId = 0;
+    residueData.forEach((residue) => {
+      const atomMap = new Map<string, AtomInfo>();
+      const atomsForResidue = getResidueAtoms(residue);
+      atomsForResidue.forEach((atom) => {
+        const element = (atom.element ?? atom.name[0] ?? "C").toUpperCase();
+        const coords: [number, number, number] = [
+          Number(atom.coords[0]),
+          Number(atom.coords[1]),
+          Number(atom.coords[2]),
+        ];
+        const info: AtomInfo = {
+          id: nextId,
+          residueIndex: residue.index,
+          name: atom.name,
+          element,
+          coords,
+        };
+        nextId += 1;
+        atoms.push(info);
+        atomMap.set(atom.name, info);
+      });
+      residueAtomMap.set(residue.index, atomMap);
+    });
+
+    const connect = (
+      residueIdxA: number,
+      atomA: string,
+      residueIdxB: number,
+      atomB: string,
+      type: BondType
+    ) => {
+      const entryA = residueAtomMap.get(residueIdxA)?.get(atomA);
+      const entryB = residueAtomMap.get(residueIdxB)?.get(atomB);
+      if (entryA && entryB) {
+        bonds.push({ startId: entryA.id, endId: entryB.id, type });
+      }
+    };
+
+    residueData.forEach((residue, idx) => {
+      connect(residue.index, "N", residue.index, "CA", "backbone");
+      connect(residue.index, "CA", residue.index, "C", "backbone");
+      connect(residue.index, "C", residue.index, "O", "carbonyl");
+      connect(residue.index, "CA", residue.index, "CB", "sidechain");
+      const nextResidue = residueData[idx + 1];
+      if (nextResidue) {
+        connect(residue.index, "C", nextResidue.index, "N", "backbone");
       }
     });
-    observer.observe(containerRef.current);
+
+    return { atoms, bonds };
+  }, [residueData]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) {
+      return () => undefined;
+    }
+
+    const observer = new ResizeObserver((entries) => {
+      const entry = entries[0];
+      if (!entry) {
+        return;
+      }
+      const { width, height } = entry.contentRect;
+      setDimensions((prev) => {
+        if (
+          Math.abs(prev.width - width) < 0.5 &&
+          Math.abs(prev.height - height) < 0.5
+        ) {
+          return prev;
+        }
+        return { width, height };
+      });
+    });
+
+    observer.observe(container);
     return () => {
       observer.disconnect();
     };
@@ -102,50 +247,58 @@ export function ProteinViewer({
     context.scale(dpr, dpr);
     context.clearRect(0, 0, width, height);
 
-    if (residuePoints.length === 0) {
+    const { atoms, bonds } = structure;
+    if (atoms.length === 0) {
       context.restore();
       return;
     }
 
-    const centre = residuePoints.reduce(
-      (acc, residue) => {
+    const centre = atoms.reduce(
+      (acc, atom) => {
         return {
-          x: acc.x + residue.coords[0],
-          y: acc.y + residue.coords[1],
-          z: acc.z + residue.coords[2],
+          x: acc.x + atom.coords[0],
+          y: acc.y + atom.coords[1],
+          z: acc.z + atom.coords[2],
         };
       },
       { x: 0, y: 0, z: 0 }
     );
 
-    centre.x /= residuePoints.length;
-    centre.y /= residuePoints.length;
-    centre.z /= residuePoints.length;
-
-    const yaw = rotation.yaw;
-    const pitch = clamp(rotation.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
-
-    const sinYaw = Math.sin(yaw);
-    const cosYaw = Math.cos(yaw);
-    const sinPitch = Math.sin(pitch);
-    const cosPitch = Math.cos(pitch);
+    centre.x /= atoms.length;
+    centre.y /= atoms.length;
+    centre.z /= atoms.length;
 
     let maxRadius = 1;
-    residuePoints.forEach((residue) => {
-      const dx = residue.coords[0] - centre.x;
-      const dy = residue.coords[1] - centre.y;
-      const dz = residue.coords[2] - centre.z;
+    atoms.forEach((atom) => {
+      const dx = atom.coords[0] - centre.x;
+      const dy = atom.coords[1] - centre.y;
+      const dz = atom.coords[2] - centre.z;
       const radius = Math.sqrt(dx * dx + dy * dy + dz * dz);
       if (radius > maxRadius) {
         maxRadius = radius;
       }
     });
 
-    const scale = ((Math.min(width, height) * 0.4) / maxRadius) * zoom;
-    const projection: ProjectedPoint[] = residuePoints.map((residue) => {
-      const dx = residue.coords[0] - centre.x;
-      const dy = residue.coords[1] - centre.y;
-      const dz = residue.coords[2] - centre.z;
+    const yaw = rotation.yaw;
+    const pitch = clamp(rotation.pitch, -Math.PI / 2 + 0.01, Math.PI / 2 - 0.01);
+    const sinYaw = Math.sin(yaw);
+    const cosYaw = Math.cos(yaw);
+    const sinPitch = Math.sin(pitch);
+    const cosPitch = Math.cos(pitch);
+
+    const scale = ((Math.min(width, height) * 0.42) / maxRadius) * zoom;
+
+    type ProjectedAtom = AtomInfo & {
+      screenX: number;
+      screenY: number;
+      screenZ: number;
+      radius: number;
+    };
+
+    const projectedAtoms: ProjectedAtom[] = atoms.map((atom) => {
+      const dx = atom.coords[0] - centre.x;
+      const dy = atom.coords[1] - centre.y;
+      const dz = atom.coords[2] - centre.z;
 
       const yawX = dx * cosYaw - dz * sinYaw;
       const yawZ = dx * sinYaw + dz * cosYaw;
@@ -153,53 +306,129 @@ export function ProteinViewer({
       const pitchY = dy * cosPitch - yawZ * sinPitch;
       const pitchZ = dy * sinPitch + yawZ * cosPitch;
 
+      const screenX = yawX * scale + width / 2;
+      const screenY = pitchY * scale + height / 2;
+
+      const baseRadius = ATOM_RADII[atom.element] ?? 0.5;
+      const radius = Math.max(2.2, baseRadius * scale * 0.35);
+
       return {
-        index: residue.index,
-        x: yawX * scale + width / 2,
-        y: pitchY * scale + height / 2,
-        z: pitchZ,
+        ...atom,
+        screenX,
+        screenY,
+        screenZ: pitchZ,
+        radius,
       };
     });
 
-    projectedRef.current = projection;
+    const minZ = projectedAtoms.reduce(
+      (acc, atom) => Math.min(acc, atom.screenZ),
+      Number.POSITIVE_INFINITY
+    );
+    const maxZ = projectedAtoms.reduce(
+      (acc, atom) => Math.max(acc, atom.screenZ),
+      Number.NEGATIVE_INFINITY
+    );
+    const depthRange = Math.max(1e-3, maxZ - minZ);
 
-    // Draw bonds between consecutive residues
-    context.lineJoin = "round";
-    context.lineCap = "round";
-    context.lineWidth = 3;
-    context.strokeStyle = "rgba(148, 163, 184, 0.65)";
+    const projectedMap = new Map<number, ProjectedAtom>();
+    projectedAtoms.forEach((atom) => {
+      projectedMap.set(atom.id, atom);
+    });
 
-    for (let i = 0; i < projection.length - 1; i += 1) {
-      const start = projection[i];
-      const end = projection[i + 1];
+    projectedCARef.current = projectedAtoms
+      .filter((atom) => atom.name === "CA")
+      .map((atom) => ({
+        residueIndex: atom.residueIndex,
+        x: atom.screenX,
+        y: atom.screenY,
+        z: atom.screenZ,
+      }));
+
+    const sortedBonds = [...bonds].sort((a, b) => {
+      const startA = projectedMap.get(a.startId);
+      const endA = projectedMap.get(a.endId);
+      const startB = projectedMap.get(b.startId);
+      const endB = projectedMap.get(b.endId);
+      const depthA = startA && endA ? (startA.screenZ + endA.screenZ) / 2 : 0;
+      const depthB = startB && endB ? (startB.screenZ + endB.screenZ) / 2 : 0;
+      return depthA - depthB;
+    });
+
+    sortedBonds.forEach((bond) => {
+      const start = projectedMap.get(bond.startId);
+      const end = projectedMap.get(bond.endId);
+      if (!start || !end) {
+        return;
+      }
+
+      const avgZ = (start.screenZ + end.screenZ) / 2;
+      const depthFactor = 1 - (avgZ - minZ) / depthRange;
+      const colour = BOND_COLORS[bond.type];
+      const tint = colourString(scaleColour(colour, 0.7 + depthFactor * 0.3), 0.85);
+      const glow = colourString(offsetColour(colour, 40), 0.5);
+      const gradient = context.createLinearGradient(
+        start.screenX,
+        start.screenY,
+        end.screenX,
+        end.screenY
+      );
+      gradient.addColorStop(0, glow);
+      gradient.addColorStop(0.45, tint);
+      gradient.addColorStop(1, glow);
+      context.strokeStyle = gradient;
+      const baseWidth = BOND_WIDTH[bond.type] ?? 5;
+      const widthScale = 0.55 + depthFactor * 0.6;
+      context.lineWidth = Math.max(1.2, baseWidth * 0.35 * widthScale);
+      context.lineCap = "round";
       context.beginPath();
-      context.moveTo(start.x, start.y);
-      context.lineTo(end.x, end.y);
+      context.moveTo(start.screenX, start.screenY);
+      context.lineTo(end.screenX, end.screenY);
       context.stroke();
-    }
+    });
 
-    // Draw nodes
-    const sorted = [...projection].sort((a, b) => a.z - b.z);
-    const highlightIndex = selectedResidue ?? null;
+    const sortedAtoms = [...projectedAtoms].sort((a, b) => a.screenZ - b.screenZ);
 
-    sorted.forEach((point) => {
-      const depthFactor = clamp(1 - point.z / (maxRadius * 2), 0.2, 1);
-      const radius = highlightIndex === point.index ? 7 : 5;
+    sortedAtoms.forEach((atom) => {
+      const depthFactor = 1 - (atom.screenZ - minZ) / depthRange;
+      const highlight = selectedResidue !== null && atom.name === "CA" && atom.residueIndex === selectedResidue;
+
+      const fallbackColour: [number, number, number] = [226, 232, 240];
+      const baseColour: [number, number, number] = highlight
+        ? [56, 189, 248]
+        : ATOM_COLORS[atom.element] ?? fallbackColour;
+      const shaded = scaleColour(baseColour, 0.6 + depthFactor * 0.4);
+      const highlightColour: [number, number, number] = highlight
+        ? [125, 211, 252]
+        : offsetColour(baseColour, 55);
+
+      const radius = highlight ? atom.radius * 1.3 : atom.radius;
+      const gradient = context.createRadialGradient(
+        atom.screenX - radius * 0.35,
+        atom.screenY - radius * 0.35,
+        Math.max(1, radius * 0.2),
+        atom.screenX,
+        atom.screenY,
+        radius
+      );
+      gradient.addColorStop(0, colourString(highlightColour));
+      gradient.addColorStop(0.95, colourString(shaded));
+      gradient.addColorStop(1, colourString([15, 23, 42], 0.65));
+
       context.beginPath();
-      context.fillStyle = highlightIndex === point.index
-        ? "#38bdf8"
-        : `rgba(${Math.floor(94 * depthFactor)}, ${Math.floor(
-            234 * depthFactor
-          )}, ${Math.floor(212 * depthFactor)}, 0.9)`;
-      context.strokeStyle = "rgba(15, 23, 42, 0.9)";
-      context.lineWidth = 1.5;
-      context.arc(point.x, point.y, radius, 0, Math.PI * 2);
+      context.fillStyle = gradient;
+      context.arc(atom.screenX, atom.screenY, radius, 0, Math.PI * 2);
       context.fill();
+
+      context.lineWidth = highlight ? 1.8 : 1.2;
+      context.strokeStyle = highlight
+        ? "rgba(14, 165, 233, 0.8)"
+        : "rgba(15, 23, 42, 0.75)";
       context.stroke();
     });
 
     context.restore();
-  }, [dimensions, residuePoints, rotation.pitch, rotation.yaw, selectedResidue, zoom]);
+  }, [dimensions, rotation.pitch, rotation.yaw, selectedResidue, structure, zoom]);
 
   useEffect(() => {
     if (frameRef.current !== null) {
@@ -212,7 +441,7 @@ export function ProteinViewer({
       }
       frameRef.current = null;
     };
-  }, [renderScene, dimensions, residuePoints, rotation, zoom, selectedResidue]);
+  }, [renderScene, dimensions, structure, rotation, zoom, selectedResidue]);
 
   const handlePointerDown = useCallback((event: ReactPointerEvent<HTMLCanvasElement>) => {
     draggingRef.current = true;
@@ -269,21 +498,19 @@ export function ProteinViewer({
       const px = x * dpr;
       const py = y * dpr;
 
-let nearest: { index: number; distance: number } | undefined;
+      let nearest: { residueIndex: number; distance: number } | undefined;
+      projectedCARef.current.forEach((point) => {
+        const dx = point.x * dpr - px;
+        const dy = point.y * dpr - py;
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        if (!nearest || distance < nearest.distance) {
+          nearest = { residueIndex: point.residueIndex, distance };
+        }
+      });
 
-projectedRef.current.forEach((point) => {
-  const dx = point.x * dpr - px;
-  const dy = point.y * dpr - py;
-  const distance = Math.hypot(dx, dy);
-  const best = nearest?.distance ?? Number.POSITIVE_INFINITY;
-  if (distance < best) {
-    nearest = { index: point.index, distance };
-  }
-});
-
-if (nearest && nearest.distance <= 24 && onSelectResidue) {
-  onSelectResidue(nearest.index);
-}
+      if (nearest && nearest.distance <= 28) {
+        onSelectResidue(nearest.residueIndex);
+      }
     },
     [onSelectResidue]
   );
@@ -314,7 +541,7 @@ if (nearest && nearest.distance <= 24 && onSelectResidue) {
         onWheel={handleWheel}
         role="presentation"
       />
-      {residuePoints.length === 0 ? (
+      {structure.atoms.length === 0 ? (
         <div className="protein-viewer__empty">No structure available</div>
       ) : null}
       <style jsx>{`
@@ -324,7 +551,8 @@ if (nearest && nearest.distance <= 24 && onSelectResidue) {
           height: 100%;
           border-radius: 1rem;
           overflow: hidden;
-          background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.25), transparent 55%),
+          background: radial-gradient(circle at 30% 20%, rgba(59, 130, 246, 0.28), transparent 55%),
+            radial-gradient(circle at 70% 80%, rgba(56, 189, 248, 0.2), transparent 60%),
             #020617;
           border: 1px solid rgba(148, 163, 184, 0.12);
         }

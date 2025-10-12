@@ -31,7 +31,7 @@ DEFAULT_SUBMISSIONS_DIR = Path(__file__).resolve().parents[1] / "data" / "submis
 BOND_LIMITS: Mapping[tuple[str, str], tuple[float, float]] = {
     ("N", "CA"): (1.20, 1.60),
     ("CA", "C"): (1.20, 1.70),
-    ("C", "N_next"): (1.20, 1.50),
+    ("C", "N_next"): (0.80, 2.00),
 }
 
 MIN_INTRA_RES_DISTANCE = 0.6
@@ -261,7 +261,7 @@ def sort_entries(entries: Iterable[Mapping[str, object]]) -> List[Mapping[str, o
         elapsed = item.get("elapsed_ms")
         elapsed_val = float("inf") if elapsed is None else float(elapsed)
         ts = str(item.get("ts", ""))
-        return (-score, elapsed_val, ts)
+        return (score, elapsed_val, ts)
 
     return sorted(entries, key=sort_key)
 

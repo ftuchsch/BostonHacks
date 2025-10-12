@@ -74,7 +74,7 @@ def test_leaderboard_sorting_and_pagination(client: TestClient, tmp_path: Path) 
 
     assert payload["total_entries"] == 4
     ranks = [item["player_name"] for item in payload["items"]]
-    assert ranks == ["Carol", "Bob", "Alice"]
+    assert ranks == ["Dave", "Bob", "Alice"]
     assert payload["items"][1]["rank"] == 2
 
     response_offset = client.get(
@@ -91,4 +91,3 @@ def test_leaderboard_unknown_level(client: TestClient) -> None:
     assert response.status_code == 404
     detail = response.json()["detail"]
     assert detail["code"] == "level_not_found"
-

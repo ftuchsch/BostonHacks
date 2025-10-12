@@ -33,8 +33,8 @@ const ScoreBarsComponent = ({ totalScore, terms, isScoring, highlightedTerms = [
   const totalFormatter = useMemo(
     () =>
       new Intl.NumberFormat(undefined, {
-        minimumFractionDigits: 1,
-        maximumFractionDigits: 1,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
       }),
     []
   );

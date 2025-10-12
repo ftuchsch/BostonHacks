@@ -30,6 +30,8 @@ export default function LevelLoaderPage({
 
   const [state, setState] = useState<LoaderState>({ status: "loading" });
   const isMounted = useRef(true);
+  const backendHelpMessage =
+    "Unable to reach the backend API. Start the Python server with `make dev-back` (http://127.0.0.1:8000) and try again.";
 
   useEffect(() => {
     isMounted.current = true;
@@ -61,29 +63,26 @@ export default function LevelLoaderPage({
     void (async () => {
       try {
         const lvl = await getLevel(params.id);
-        if (cancelled || !isMounted.current) {
-          return;
-        }
+        if (cancelled || !isMounted.current) return;
 
-        const coords = createLinearBackbone(lvl.sequence);
-        if (cancelled || !isMounted.current) {
-          return;
-        }
+        // Start with a placeholder backbone so the UI shows something immediately
+        const placeholderCoords = createLinearBackbone(lvl.sequence);
 
         setState({
           status: "ready",
           level: lvl,
-          coords,
+          coords: placeholderCoords,
           coordsStatus: "loading",
           coordsError: null,
         });
 
+        // Try to fetch the real coordinates
         void (async () => {
           try {
-            const response = await fetch(lvl.start_coords_url, { cache: "no-store" });
-            if (cancelled || !isMounted.current) {
-              return;
-            }
+            const response = await fetch(lvl.start_coords_url, {
+              cache: "no-store",
+            });
+            if (cancelled || !isMounted.current) return;
 
             if (!response.ok) {
               throw new Error(
@@ -91,17 +90,13 @@ export default function LevelLoaderPage({
               );
             }
 
-            const payload = await response.json();
+            const payload: unknown = await response.json();
             const parsed = parseResidueCoordinates(payload);
+
             if (parsed && parsed.length > 0 && isMounted.current && !cancelled) {
               setState((prev) => {
-                if (prev.status !== "ready") {
-                  return prev;
-                }
-                return {
-                  ...prev,
-                  coords: parsed,
-                };
+                if (prev.status !== "ready") return prev;
+                return { ...prev, coords: parsed };
               });
               updateCoordsStatus("ready");
             } else {
@@ -111,28 +106,48 @@ export default function LevelLoaderPage({
               );
             }
           } catch (err) {
-            if (cancelled || !isMounted.current) {
-              return;
-            }
+            if (cancelled || !isMounted.current) return;
+
             const message =
-              err instanceof Error
+              err instanceof TypeError
+                ? backendHelpMessage
+                : err instanceof Error
                 ? err.message
                 : "Failed to load starting coordinates.";
             updateCoordsStatus("error", message);
           }
         })();
       } catch (err) {
-        if (cancelled || !isMounted.current) {
+        if (cancelled || !isMounted.current) return;
+
+        if (err instanceof ApiError) {
+          if (err.status === 404) {
+            setState({ status: "not_found" });
+            return;
+          }
+
+          const detail =
+            err.body &&
+            typeof err.body === "object" &&
+            "detail" in err.body &&
+            typeof (err.body as { detail?: unknown }).detail === "string"
+              ? (err.body as { detail: string }).detail
+              : null;
+
+          const message =
+            detail ?? err.message ?? `Server responded with status ${err.status} while loading the level.`;
+
+          setState({ status: "error", message });
           return;
         }
 
-        if (err instanceof ApiError && err.status === 404) {
-          setState({ status: "not_found" });
-        } else {
-          const message =
-            err instanceof Error ? err.message : "Failed to load level.";
-          setState({ status: "error", message });
-        }
+        const message =
+          err instanceof TypeError
+            ? backendHelpMessage
+            : err instanceof Error
+            ? err.message
+            : "Failed to load level.";
+        setState({ status: "error", message });
       }
     })();
 
@@ -142,38 +157,33 @@ export default function LevelLoaderPage({
   }, [params.id, updateCoordsStatus]);
 
   const handleRetryCoords = useCallback(() => {
-    if (!isMounted.current) {
-      return;
-    }
+    if (!isMounted.current) return;
     setState((prev) => {
-      if (prev.status !== "ready") {
-        return prev;
-      }
+      if (prev.status !== "ready") return prev;
 
       updateCoordsStatus("loading");
 
       void (async () => {
         try {
-          const response = await fetch(prev.level.start_coords_url, { cache: "no-store" });
-          if (!isMounted.current) {
-            return;
-          }
+          const response = await fetch(prev.level.start_coords_url, {
+            cache: "no-store",
+          });
+          if (!isMounted.current) return;
           if (!response.ok) {
             throw new Error(
               `Failed to fetch coordinates (status ${response.status})`
             );
           }
-          const payload = await response.json();
+
+          const payload: unknown = await response.json();
           const parsed = parseResidueCoordinates(payload);
+
           if (parsed && parsed.length > 0) {
-            setState((prev) => {
-              if (!isMounted.current || prev.status !== "ready") {
-                return prev;
+            setState((innerPrev) => {
+              if (!isMounted.current || innerPrev.status !== "ready") {
+                return innerPrev;
               }
-              return {
-                ...prev,
-                coords: parsed,
-              };
+              return { ...innerPrev, coords: parsed };
             });
             updateCoordsStatus("ready");
           } else {
@@ -183,11 +193,11 @@ export default function LevelLoaderPage({
             );
           }
         } catch (err) {
-          if (!isMounted.current) {
-            return;
-          }
+          if (!isMounted.current) return;
           const message =
-            err instanceof Error
+            err instanceof TypeError
+              ? backendHelpMessage
+              : err instanceof Error
               ? err.message
               : "Failed to load starting coordinates.";
           updateCoordsStatus("error", message);
@@ -198,6 +208,7 @@ export default function LevelLoaderPage({
     });
   }, [updateCoordsStatus]);
 
+  // --- Render states ---
   if (state.status === "loading") {
     return (
       <main className="level-loader">
@@ -221,7 +232,7 @@ export default function LevelLoaderPage({
   if (state.status === "error") {
     return (
       <main className="level-loader">
-        <h1>Level failed to load</h1>
+        <h1>Failed to load level</h1>
         <p>{state.message}</p>
         <Link href="/levels" className="level-loader__back">
           Return to Level Select
@@ -230,55 +241,18 @@ export default function LevelLoaderPage({
     );
   }
 
-  const { level, coords, coordsStatus, coordsError } = state;
+  if (state.status === "ready") {
+    return (
+      <PlayScreen
+        levelId={state.level.id}
+        sequence={state.level.sequence}
+        initialCoords={state.coords}
+        coordsStatus={state.coordsStatus}
+        coordsError={state.coordsError}
+        onRetryCoords={handleRetryCoords}
+      />
+    );
+  }
 
-  return (
-    <main className="level-loader">
-      <header className="level-loader__header">
-        <div>
-          <p className="level-loader__breadcrumb">
-            <Link href="/levels">Levels</Link> / {level.name}
-          </p>
-          <h1>{level.name}</h1>
-          <p className="level-loader__meta">
-            <span className="level-loader__badge">{level.difficulty}</span>
-            <span aria-hidden="true">•</span>
-            <span>{level.length} residues</span>
-          </p>
-        </div>
-      </header>
-      {coordsStatus === "loading" && (
-        <div className="level-loader__notice">Fetching starting coordinates…</div>
-      )}
-      {coordsStatus === "error" && (
-        <div className="level-loader__notice level-loader__notice--error">
-          <p>{coordsError ?? "Failed to load starting coordinates."}</p>
-          <button type="button" onClick={handleRetryCoords}>
-            Retry download
-          </button>
-        </div>
-      )}
-      <section className="level-loader__content">
-        <div className="level-loader__play">
-          <PlayScreen
-            levelId={level.id}
-            sequence={level.sequence}
-            initialCoords={coords ?? undefined}
-          />
-        </div>
-        <aside className="level-loader__sidebar">
-          <h2>Tips</h2>
-          {level.tips && level.tips.length > 0 ? (
-            <ul>
-              {level.tips.map((tip) => (
-                <li key={tip}>{tip}</li>
-              ))}
-            </ul>
-          ) : (
-            <p>No tips provided for this level.</p>
-          )}
-        </aside>
-      </section>
-    </main>
-  );
+  return null;
 }
