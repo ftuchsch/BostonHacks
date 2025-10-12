@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, Iterable, List, Tuple, Set
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -154,26 +154,150 @@ def _capture_coords(residue) -> Dict[str, Tuple[float, float, float]]:
     return {atom.id[1]: atom.xyz for atom in residue.atoms}
 
 
-def _apply_phi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
-    origin = coords.get("N")
-    if origin is None:
-        return {}
-    radians = math.radians(delta)
-    amplitude = 0.35
-    dx = amplitude * math.cos(radians)
-    dy = amplitude * math.sin(radians)
-    return {"N": (origin[0] + dx, origin[1] + dy, origin[2])}
+def _vec_sub(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (a[0] - b[0], a[1] - b[1], a[2] - b[2])
 
 
-def _apply_psi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
-    origin = coords.get("N")
-    if origin is None:
+def _vec_add(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> Tuple[float, float, float]:
+    return (a[0] + b[0], a[1] + b[1], a[2] + b[2])
+
+
+def _vec_scale(
+    v: Tuple[float, float, float], factor: float
+) -> Tuple[float, float, float]:
+    return (v[0] * factor, v[1] * factor, v[2] * factor)
+
+
+def _vec_dot(a: Tuple[float, float, float], b: Tuple[float, float, float]) -> float:
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+
+
+def _vec_cross(
+    a: Tuple[float, float, float], b: Tuple[float, float, float]
+) -> Tuple[float, float, float]:
+    return (
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    )
+
+
+def _vec_norm(a: Tuple[float, float, float]) -> float:
+    return math.sqrt(_vec_dot(a, a))
+
+
+def _vec_normalise(
+    a: Tuple[float, float, float]
+) -> Tuple[float, float, float] | None:
+    length = _vec_norm(a)
+    if length < 1.0e-6:
+        return None
+    scale = 1.0 / length
+    return (a[0] * scale, a[1] * scale, a[2] * scale)
+
+
+def _rotate_point_around_axis(
+    point: Tuple[float, float, float],
+    origin: Tuple[float, float, float],
+    axis_unit: Tuple[float, float, float],
+    radians: float,
+) -> Tuple[float, float, float]:
+    """
+    Rotate ``point`` around an axis passing through ``origin`` with direction ``axis_unit``.
+    """
+
+    rel = _vec_sub(point, origin)
+    cos_t = math.cos(radians)
+    sin_t = math.sin(radians)
+    term1 = _vec_scale(rel, cos_t)
+    term2 = _vec_scale(_vec_cross(axis_unit, rel), sin_t)
+    term3 = _vec_scale(axis_unit, _vec_dot(axis_unit, rel) * (1 - cos_t))
+    rotated = _vec_add(_vec_add(term1, term2), term3)
+    return _vec_add(rotated, origin)
+
+
+def _apply_rotation_to_residues(
+    state,
+    axis_origin: Tuple[float, float, float],
+    axis_direction: Tuple[float, float, float],
+    radians: float,
+    residues: Iterable[int],
+    skip_atoms: Dict[int, Set[str]] | None = None,
+) -> Dict[int, Dict[str, Tuple[float, float, float]]]:
+    unit = _vec_normalise(axis_direction)
+    if unit is None or abs(radians) < 1.0e-6:
         return {}
+
+    updates: Dict[int, Dict[str, Tuple[float, float, float]]] = {}
+    for rid in residues:
+        residue = state.residues.get(rid)
+        if residue is None:
+            continue
+        excluded = skip_atoms.get(rid) if skip_atoms else None
+        if not excluded:
+            excluded = set()
+        atom_updates: Dict[str, Tuple[float, float, float]] = {}
+        for atom in residue.atoms:
+            name = atom.id[1]
+            if name in excluded:
+                continue
+            rotated = _rotate_point_around_axis(atom.xyz, axis_origin, unit, radians)
+            atom_updates[name] = (
+                float(rotated[0]),
+                float(rotated[1]),
+                float(rotated[2]),
+            )
+        if atom_updates:
+            updates[rid] = atom_updates
+    return updates
+
+
+def _apply_phi(state, res_idx: int, delta: float) -> Dict[int, Dict[str, Tuple[float, float, float]]]:
+    residue = state.residues.get(res_idx)
+    if residue is None:
+        return {}
+    coords = _capture_coords(residue)
+    n = coords.get("N")
+    ca = coords.get("CA")
+    if n is None or ca is None:
+        return {}
+    axis = _vec_sub(ca, n)
     radians = math.radians(delta)
-    amplitude = 0.35
-    dy = amplitude * math.cos(radians)
-    dz = amplitude * math.sin(radians)
-    return {"N": (origin[0], origin[1] + dy, origin[2] + dz)}
+    target_residues = [rid for rid in state.residues if rid >= res_idx]
+    skip_atoms = {
+        res_idx: {"N", "CA"},
+    }
+    return _apply_rotation_to_residues(
+        state,
+        axis_origin=n,
+        axis_direction=axis,
+        radians=radians,
+        residues=target_residues,
+        skip_atoms=skip_atoms,
+    )
+
+
+def _apply_psi(state, res_idx: int, delta: float) -> Dict[int, Dict[str, Tuple[float, float, float]]]:
+    residue = state.residues.get(res_idx)
+    if residue is None:
+        return {}
+    coords = _capture_coords(residue)
+    ca = coords.get("CA")
+    c = coords.get("C")
+    if ca is None or c is None:
+        return {}
+    axis = _vec_sub(c, ca)
+    radians = math.radians(delta)
+    target_residues = [rid for rid in state.residues if rid > res_idx]
+    if not target_residues:
+        return {}
+    return _apply_rotation_to_residues(
+        state,
+        axis_origin=ca,
+        axis_direction=axis,
+        radians=radians,
+        residues=target_residues,
+    )
 
 
 def _apply_rotamer(coords: Dict[str, Tuple[float, float, float]], rotamer_id: int) -> Dict[str, Tuple[float, float, float]]:
@@ -197,7 +321,16 @@ def _coerce_vector(value) -> Tuple[float, float, float]:
         raise ValueError("coordinate components must be numeric")
 
 
-def _diff_updates(state, diff: Dict[str, object]) -> Tuple[int, Dict[str, Tuple[float, float, float]]]:
+def _merge_residue_updates(
+    target: Dict[int, Dict[str, Tuple[float, float, float]]],
+    source: Dict[int, Dict[str, Tuple[float, float, float]]],
+) -> None:
+    for rid, atoms in source.items():
+        bucket = target.setdefault(rid, {})
+        bucket.update(atoms)
+
+
+def _diff_updates(state, diff: Dict[str, object]) -> Tuple[Set[int], Dict[int, Dict[str, Tuple[float, float, float]]]]:
     try:
         res_idx = int(diff["res_idx"])
     except Exception as exc:  # pragma: no cover - defensive guard
@@ -212,7 +345,8 @@ def _diff_updates(state, diff: Dict[str, object]) -> Tuple[int, Dict[str, Tuple[
         raise HTTPException(status_code=400, detail="diff.move must be an object")
 
     coords = _capture_coords(residue)
-    updates: Dict[str, Tuple[float, float, float]] = {}
+    updates: Dict[int, Dict[str, Tuple[float, float, float]]] = {}
+    affected: Set[int] = {res_idx}
 
     move_type = move.get("type")
     if isinstance(move_type, str):
@@ -225,18 +359,26 @@ def _diff_updates(state, diff: Dict[str, object]) -> Tuple[int, Dict[str, Tuple[
             psi = delta.get("psi")
             if phi is not None:
                 try:
-                    updates.update(_apply_phi(coords, float(phi)))
+                    phi_updates = _apply_phi(state, res_idx, float(phi))
+                    if phi_updates:
+                        _merge_residue_updates(updates, phi_updates)
+                        affected |= set(phi_updates)
                 except (TypeError, ValueError) as exc:
                     raise HTTPException(status_code=400, detail=f"Invalid phi delta: {exc}") from exc
             if psi is not None:
                 try:
-                    updates.update(_apply_psi(coords, float(psi)))
+                    psi_updates = _apply_psi(state, res_idx, float(psi))
+                    if psi_updates:
+                        _merge_residue_updates(updates, psi_updates)
+                        affected |= set(psi_updates)
                 except (TypeError, ValueError) as exc:
                     raise HTTPException(status_code=400, detail=f"Invalid psi delta: {exc}") from exc
     elif move_type == "rotamer":
         rotamer_id = move.get("rotamer_id", 0)
         try:
-            updates.update(_apply_rotamer(coords, int(rotamer_id)))
+            rotamer_updates = _apply_rotamer(coords, int(rotamer_id))
+            if rotamer_updates:
+                updates.setdefault(res_idx, {}).update(rotamer_updates)
         except (TypeError, ValueError) as exc:
             raise HTTPException(status_code=400, detail=f"Invalid rotamer id: {exc}") from exc
     else:
@@ -246,11 +388,49 @@ def _diff_updates(state, diff: Dict[str, object]) -> Tuple[int, Dict[str, Tuple[
             if name == "type":
                 continue
             try:
-                updates[name] = _coerce_vector(value)
+                updates.setdefault(res_idx, {})[name] = _coerce_vector(value)
             except ValueError as exc:
                 raise HTTPException(status_code=400, detail=f"Invalid atom update for {name}: {exc}") from exc
 
-    return res_idx, updates
+    return affected, updates
+
+
+def _serialise_structure(state) -> List[Dict[str, object]]:
+    residues_payload: List[Dict[str, object]] = []
+    for rid in sorted(state.residues):
+        residue = state.residues[rid]
+        atoms_payload: List[Dict[str, object]] = []
+        ca_coords: Tuple[float, float, float] | None = None
+        for atom in residue.atoms:
+            name = atom.id[1]
+            coords_tuple = (
+                float(atom.xyz[0]),
+                float(atom.xyz[1]),
+                float(atom.xyz[2]),
+            )
+            if name.upper() == "CA":
+                ca_coords = coords_tuple
+            atoms_payload.append(
+                {
+                    "name": name,
+                    "element": name[0].upper(),
+                    "coords": [coords_tuple[0], coords_tuple[1], coords_tuple[2]],
+                }
+            )
+        centroid = ca_coords or (
+            float(residue.atoms[0].xyz[0]),
+            float(residue.atoms[0].xyz[1]),
+            float(residue.atoms[0].xyz[2]),
+        )
+        residues_payload.append(
+            {
+                "index": rid,
+                "name": residue.name,
+                "coords": [centroid[0], centroid[1], centroid[2]],
+                "atoms": atoms_payload,
+            }
+        )
+    return residues_payload
 
 
 @router.post("/api/score")
@@ -267,14 +447,16 @@ async def api_score(req: ScoreRequest):
         payload = req.payload or {}
         diff = payload.get("diff") or req.diff
         if diff:
-            res_idx, updates = _diff_updates(state, diff)
+            affected_residues, updates = _diff_updates(state, diff)
             if updates:
-                state.update_residue_coords(res_idx, updates)
-                result = local_rescore(state, {res_idx})
+                for rid, atom_updates in updates.items():
+                    state.update_residue_coords(rid, atom_updates)
+                result = local_rescore(state, affected_residues)
             else:
                 result = score_total(state)
         else:
             result = score_total(state)
+    result["structure"] = _serialise_structure(state)
     result["stats"] = {
         "term_eval_calls": state.stats.term_eval_calls,
         "full_passes": state.stats.full_passes,

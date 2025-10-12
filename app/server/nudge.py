@@ -40,24 +40,92 @@ def _capture_coords(residue: Residue) -> Dict[str, Tuple[float, float, float]]:
 
 def _apply_phi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
     origin = coords.get("N")
-    if origin is None:
+    ca = coords.get("CA")
+    if origin is None or ca is None:
         return {}
     radians = math.radians(delta)
-    amplitude = 0.35
-    dx = amplitude * math.cos(radians)
-    dy = amplitude * math.sin(radians)
-    return {"N": (origin[0] + dx, origin[1] + dy, origin[2])}
+    axis = (
+        ca[0] - origin[0],
+        ca[1] - origin[1],
+        ca[2] - origin[2],
+    )
+    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
+    if length < 1.0e-6:
+        return {}
+    ux, uy, uz = axis[0] / length, axis[1] / length, axis[2] / length
+    cos_t = math.cos(radians)
+    sin_t = math.sin(radians)
+
+    def _rotate(point: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        rel = (
+            point[0] - origin[0],
+            point[1] - origin[1],
+            point[2] - origin[2],
+        )
+        dot = rel[0] * ux + rel[1] * uy + rel[2] * uz
+        cross = (
+            uy * rel[2] - uz * rel[1],
+            uz * rel[0] - ux * rel[2],
+            ux * rel[1] - uy * rel[0],
+        )
+        rotated = (
+            rel[0] * cos_t + cross[0] * sin_t + ux * dot * (1 - cos_t),
+            rel[1] * cos_t + cross[1] * sin_t + uy * dot * (1 - cos_t),
+            rel[2] * cos_t + cross[2] * sin_t + uz * dot * (1 - cos_t),
+        )
+        return (
+            rotated[0] + origin[0],
+            rotated[1] + origin[1],
+            rotated[2] + origin[2],
+        )
+
+    rotated_n = _rotate(origin)
+    return {"N": rotated_n}
 
 
 def _apply_psi(coords: Dict[str, Tuple[float, float, float]], delta: float) -> Dict[str, Tuple[float, float, float]]:
-    origin = coords.get("N")
-    if origin is None:
+    ca = coords.get("CA")
+    c = coords.get("C")
+    if ca is None or c is None:
         return {}
     radians = math.radians(delta)
-    amplitude = 0.35
-    dy = amplitude * math.cos(radians)
-    dz = amplitude * math.sin(radians)
-    return {"N": (origin[0], origin[1] + dy, origin[2] + dz)}
+    axis = (
+        c[0] - ca[0],
+        c[1] - ca[1],
+        c[2] - ca[2],
+    )
+    length = math.sqrt(axis[0] ** 2 + axis[1] ** 2 + axis[2] ** 2)
+    if length < 1.0e-6:
+        return {}
+    ux, uy, uz = axis[0] / length, axis[1] / length, axis[2] / length
+    cos_t = math.cos(radians)
+    sin_t = math.sin(radians)
+
+    def _rotate(point: Tuple[float, float, float]) -> Tuple[float, float, float]:
+        rel = (
+            point[0] - ca[0],
+            point[1] - ca[1],
+            point[2] - ca[2],
+        )
+        dot = rel[0] * ux + rel[1] * uy + rel[2] * uz
+        cross = (
+            uy * rel[2] - uz * rel[1],
+            uz * rel[0] - ux * rel[2],
+            ux * rel[1] - uy * rel[0],
+        )
+        rotated = (
+            rel[0] * cos_t + cross[0] * sin_t + ux * dot * (1 - cos_t),
+            rel[1] * cos_t + cross[1] * sin_t + uy * dot * (1 - cos_t),
+            rel[2] * cos_t + cross[2] * sin_t + uz * dot * (1 - cos_t),
+        )
+        return (
+            rotated[0] + ca[0],
+            rotated[1] + ca[1],
+            rotated[2] + ca[2],
+        )
+
+    rotated_n = _rotate(coords.get("N", ca))
+    return {"N": rotated_n}
 
 
 def _apply_rotamer(

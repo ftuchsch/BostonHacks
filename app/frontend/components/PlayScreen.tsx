@@ -149,10 +149,12 @@ export const PlayScreen = ({
     null
   );
   const [submitModalOpen, setSubmitModalOpen] = useState(false);
-  const structureResidues = useMemo(
-    () => initialCoords ?? null,
-    [initialCoords]
+  const [structureResidues, setStructureResidues] = useState<ResidueCoordinate[] | null>(
+    initialCoords ?? null
   );
+  useEffect(() => {
+    setStructureResidues(initialCoords ?? null);
+  }, [initialCoords]);
   const submitCoords = useMemo(() => {
     if (!structureResidues) {
       const fallbackCount = sequence?.length ?? 0;
@@ -392,6 +394,9 @@ export const PlayScreen = ({
       setTermTotals(response.terms);
       setPerResidue(response.per_residue);
       setHeatmapValues(meta?.heatmap ?? fallbackHeatmap(response));
+      if (response.structure && response.structure.length > 0) {
+        setStructureResidues(response.structure);
+      }
       if (selectedResidue === null && response.per_residue.length > 0) {
         setSelectedResidue(response.per_residue[0].idx);
       }
@@ -401,7 +406,7 @@ export const PlayScreen = ({
       previousTermsRef.current = response.terms;
       previousResiduesRef.current = response.per_residue;
     },
-    [selectedResidue]
+    [selectedResidue, setStructureResidues]
   );
 
   const handleRequestError = useCallback(() => {

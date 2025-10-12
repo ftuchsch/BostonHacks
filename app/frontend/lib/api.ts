@@ -1,3 +1,5 @@
+import { parseResidueCoordinates, type ResidueCoordinate } from "./structures";
+
 export type ScoreTerms = {
   clash: number;
   rama: number;
@@ -20,6 +22,7 @@ export type ScoreResponse = {
   terms: ScoreTerms;
   per_residue: PerResidueTerm[];
   stats?: ScoreStats;
+  structure?: ResidueCoordinate[];
 };
 
 export type ScoreStats = {
@@ -74,6 +77,7 @@ export type NudgeResponse = {
   expected_delta_score: number;
   term_deltas: ScoreTerms;
   model_used: boolean;
+  note?: string;
 };
 
 export type TorsionMove = {
@@ -338,6 +342,10 @@ function normaliseScoreResponse(raw: Record<string, unknown>): ScoreResponse {
   };
   if (stats) {
     response.stats = stats;
+  }
+  const structurePayload = parseResidueCoordinates({ residues: raw["structure"] });
+  if (structurePayload && structurePayload.length > 0) {
+    response.structure = structurePayload;
   }
   return response;
 }
