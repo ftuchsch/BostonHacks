@@ -1,6 +1,6 @@
 # BostonHacks
 
-My solo AI/ML project for BostonHacks.
+My solo ML project for BostonHacks! FoldIt is a citizen-science puzzle game that turns protein folding into an interactive challenge, where players manipulate 3D protein structures to find low-energy conformations. For this hackathon’s “Upgrade” track—where participants reimagine an older application using modern technology—I built a web-based, FoldIt-inspired platform that lets users visualize proteins, edit torsion angles (φ, ψ, χ), and receive real-time feedback using biophysical scoring terms like rotamer, Ramachandran, and hydrogen-bond energies. I developed the core frontend and backend systems—including the Next.js PlayScreen, residue coordinate parsing, linear backbone generation, and dynamic level loading/scoring APIs—and integrated machine learning models to predict optimal folding states and guide users toward more biologically realistic configurations.
 
 ## Quick start
 
