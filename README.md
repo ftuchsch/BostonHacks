@@ -5,22 +5,22 @@ My solo ML project for BostonHacks! FoldIt is a citizen-science puzzle game that
 ## Quick start
 
 ```bash
-# 1️⃣  Clone and create venv
+#1: Clone and create venv
 git clone <repo_url>
 cd <repo_name>
 python -m venv venv
 source venv/bin/activate        # (Windows: venv\Scripts\activate)
 
-# 2️⃣  Install deps
+#2: Install deps
 pip install -r requirements.txt
 
-# 3️⃣  Run backend
+#3: Run backend
 make dev-back                   # or npm run dev-back
 
-# 4️⃣  Train ΔScore model (S3.3)
+#4: Train ΔScore model (S3.3)
 make train-delta
 
-# 5️⃣  Run tests
+#5: Run tests
 make tests
 ```
 
